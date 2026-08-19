@@ -1,0 +1,74 @@
+{
+  "id": "webhookWhatsapp0001",
+  "name": "04 - Webhook de WhatsApp simulado",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-mensagens",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9b1748fc-7728-4071-a5a0-5222de4c8f86",
+      "name": "Receber mensagem externa",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-440, 0],
+      "webhookId": "452a04bc-b09c-4da4-a0d5-dd97c76f7217"
+    },
+    {
+      "parameters": {
+        "jsCode": "const entrada = $input.first().json;\nconst body = entrada.body ?? entrada;\nconst valor = body.entry?.[0]?.changes?.[0]?.value ?? {};\nconst contato = valor.contacts?.[0] ?? {};\nconst mensagemWhatsApp = valor.messages?.[0] ?? {};\n\nconst telefone = body.telefone ?? mensagemWhatsApp.from ?? '';\nconst nome = body.nome ?? contato.profile?.name ?? telefone ?? 'Sem nome';\nconst mensagem = body.mensagem\n  ?? mensagemWhatsApp.text?.body\n  ?? mensagemWhatsApp.button?.text\n  ?? mensagemWhatsApp.interactive?.button_reply?.title\n  ?? mensagemWhatsApp.interactive?.list_reply?.title\n  ?? '';\n\nif (!telefone || !mensagem) {\n  throw new Error('O webhook precisa receber telefone e mensagem.');\n}\n\nconst timestamp = mensagemWhatsApp.timestamp\n  ? new Date(Number(mensagemWhatsApp.timestamp) * 1000).toISOString()\n  : new Date().toISOString();\n\nreturn [{\n  json: {\n    data_hora: timestamp,\n    telefone: String(telefone),\n    nome: String(nome),\n    mensagem: String(mensagem),\n    origem: body.entry ? 'whatsapp_cloud_api' : 'webhook_simulado',\n    status: 'recebido',\n    resposta: `Ola, ${nome}! Sua mensagem foi recebida.`,\n    id_mensagem: body.id_mensagem ?? mensagemWhatsApp.id\n  }\n}];"
+      },
+      "id": "102081b9-2249-4f21-8613-49e1af3e5eed",
+      "name": "Interpretar mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/atendimentos",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "5431bc11-7ec5-4667-8fbb-7fe27fe04ed5",
+      "name": "Salvar na API local",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { recebido: true, salvo: $json.salvo, id: $json.id } }}",
+        "options": {}
+      },
+      "id": "31a8f8bf-51f8-4094-a87e-b2ebad3977b1",
+      "name": "Confirmar recebimento",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [400, 0]
+    }
+  ],
+  "connections": {
+    "Receber mensagem externa": {
+      "main": [[{"node": "Interpretar mensagem", "type": "main", "index": 0}]]
+    },
+    "Interpretar mensagem": {
+      "main": [[{"node": "Salvar na API local", "type": "main", "index": 0}]]
+    },
+    "Salvar na API local": {
+      "main": [[{"node": "Confirmar recebimento", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}

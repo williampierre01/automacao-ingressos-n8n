@@ -1,0 +1,88 @@
+{
+  "id": "apiLocalSimulacao001",
+  "name": "02 - Salvar atendimento na API local",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "551f1660-933a-4a70-a755-2358921060e9",
+      "name": "Executar teste",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-480, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8e10970b-acdb-4c8c-9625-fd0ea93f43cb",
+              "name": "telefone",
+              "value": "5511999999999",
+              "type": "string"
+            },
+            {
+              "id": "4fdde159-1399-4458-b051-9c9ec84b1748",
+              "name": "nome",
+              "value": "Pessoa de teste",
+              "type": "string"
+            },
+            {
+              "id": "9a5862e5-1800-4f88-a2dc-0ddeea2946a7",
+              "name": "mensagem",
+              "value": "Ola, gostaria de fazer um cadastro.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fcaa0722-c809-45c8-8de1-d174074516a9",
+      "name": "Mensagem simulada",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const entrada = $input.first().json;\n\nreturn [{\n  json: {\n    data_hora: new Date().toISOString(),\n    telefone: entrada.telefone,\n    nome: entrada.nome,\n    mensagem: entrada.mensagem,\n    origem: 'simulacao_whatsapp',\n    status: 'recebido',\n    resposta: `Ola, ${entrada.nome}! Seus dados foram recebidos.`\n  }\n}];"
+      },
+      "id": "d57448b9-676d-4807-8806-483274322dda",
+      "name": "Preparar registro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/atendimentos",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "f8a5b4de-4083-4d8f-85ba-726effc753b4",
+      "name": "Salvar na API local",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    }
+  ],
+  "connections": {
+    "Executar teste": {
+      "main": [[{"node": "Mensagem simulada", "type": "main", "index": 0}]]
+    },
+    "Mensagem simulada": {
+      "main": [[{"node": "Preparar registro", "type": "main", "index": 0}]]
+    },
+    "Preparar registro": {
+      "main": [[{"node": "Salvar na API local", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}

@@ -1,0 +1,99 @@
+{
+  "id": "wppSimulacao0001",
+  "name": "01 - Simulacao de mensagem do WhatsApp",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "bd1d1988-08f5-402d-8e68-2819b85c0140",
+      "name": "Executar teste",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9706720d-6d10-434c-9480-0769119a86b5",
+              "name": "telefone",
+              "value": "5511999999999",
+              "type": "string"
+            },
+            {
+              "id": "32ec0755-1bcd-4796-a93c-fccf308ac2f3",
+              "name": "nome",
+              "value": "Pessoa de teste",
+              "type": "string"
+            },
+            {
+              "id": "96301d34-1f7b-46cb-a537-8234f81c1fd3",
+              "name": "mensagem",
+              "value": "Ola, gostaria de fazer um cadastro.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f29f20c8-80e1-46d1-b7e8-236966b91cbe",
+      "name": "Mensagem simulada",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const entrada = $input.first().json;\n\nreturn [{\n  json: {\n    data_hora: new Date().toISOString(),\n    telefone: entrada.telefone,\n    nome: entrada.nome,\n    mensagem: entrada.mensagem,\n    origem: 'simulacao_whatsapp',\n    status: 'pronto_para_planilha',\n    resposta: `Ola, ${entrada.nome}! Seus dados foram recebidos.`\n  }\n}];"
+      },
+      "id": "8a8cf904-9dd9-4c61-bc65-fe108754309b",
+      "name": "Preparar registro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Executar teste": {
+      "main": [
+        [
+          {
+            "node": "Mensagem simulada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensagem simulada": {
+      "main": [
+        [
+          {
+            "node": "Preparar registro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "5b277d19-7bf1-4101-83fa-55d046f92313",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

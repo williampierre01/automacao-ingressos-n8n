@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Administração de eventos</title>
+  <style>
+    :root { font-family: Inter, system-ui, sans-serif; color: #15231f; background: #edf3f0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { padding: 24px max(24px, calc((100vw - 1180px) / 2)); background: #075e54; color: white; }
+    header h1 { margin: 0 0 5px; font-size: 25px; }
+    header p { margin: 0; opacity: .8; }
+    main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 60px; display: grid; gap: 20px; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; align-items: start; }
+    .card { background: white; padding: 22px; border-radius: 16px; box-shadow: 0 8px 30px rgba(28, 60, 50, .08); }
+    h2 { margin: 0 0 18px; font-size: 19px; }
+    form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    label { display: grid; gap: 6px; font-size: 13px; color: #53615c; }
+    label.wide { grid-column: 1 / -1; }
+    input, select, textarea { width: 100%; padding: 11px 12px; border: 1px solid #ccd8d3; border-radius: 9px; font: inherit; background: white; }
+    textarea { min-height: 76px; resize: vertical; }
+    button { padding: 12px 18px; border: 0; border-radius: 9px; background: #075e54; color: white; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+    .message { font-size: 13px; }
+    .message.ok { color: #08783d; }
+    .message.error { color: #b32923; }
+    .event { padding: 14px 0; border-bottom: 1px solid #e1e8e5; }
+    .event:last-child { border-bottom: 0; }
+    .event strong, .event span { display: block; }
+    .event span { margin-top: 4px; color: #62706b; font-size: 13px; }
+    .pill { display: inline-block !important; width: fit-content; margin-top: 7px !important; padding: 4px 8px; border-radius: 999px; background: #dff6e8; color: #08783d !important; }
+    .event-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .event-actions a { padding: 8px 10px; border: 1px solid #075e54; border-radius: 8px; color: #075e54; font-size: 12px; font-weight: 700; text-decoration: none; }
+    .payment { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 16px 0; border-bottom: 1px solid #e1e8e5; }
+    .payment:last-child { border-bottom: 0; }
+    .payment p { margin: 4px 0; color: #62706b; font-size: 13px; }
+    .payment-actions { display: flex; gap: 8px; align-items: center; }
+    .payment-actions a, .payment-actions button { padding: 9px 11px; border-radius: 8px; font-size: 12px; text-decoration: none; }
+    .payment-actions a { color: #075e54; border: 1px solid #075e54; }
+    .payment-actions .reject { background: #a82c26; }
+    .check-in-result { margin-top: 16px; padding: 16px; border: 1px solid #D5E2DD; border-radius: 12px; background: #F7FAF8; }
+    .check-in-result p { margin: 5px 0; color: #53615c; }
+    .check-in-result.used { border-color: #E0A33A; background: #FFF8E8; }
+    .check-in-result.success { border-color: #35A86B; background: #EAF8F0; }
+    code { color: #075e54; }
+    @media (max-width: 800px) { .grid, form { grid-template-columns: 1fr; } label.wide, .actions { grid-column: auto; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Administração de eventos</h1>
+    <p>Cadastre eventos e lotes sem alterar o fluxo do n8n.</p>
+  </header>
+  <main>
+    <section class="grid">
+      <div class="card">
+        <h2>Novo evento</h2>
+        <form id="event-form">
+          <label>Código único<input name="codigo" placeholder="festa-republica-2026" required></label>
+          <label>Nome do evento<input name="nome" required></label>
+          <label>Data<input name="data_evento" type="date" required></label>
+          <label>Horário<input name="horario" type="time"></label>
+          <label>Local<input name="local" required></label>
+          <label>Capacidade<input name="capacidade_total" type="number" min="1" value="300" required></label>
+          <label>Limite por comprador<input name="limite_por_comprador" type="number" min="1" value="5"></label>
+          <label>Reserva em minutos<input name="prazo_reserva_minutos" type="number" min="1" value="30"></label>
+          <label>Status<select name="status"><option value="rascunho">Rascunho</option><option value="vendas_abertas">Vendas abertas</option><option value="vendas_pausadas">Vendas pausadas</option></select></label>
+          <label>Organizador<input name="organizador"></label>
+          <label>Chave Pix<input name="pix_chave" autocomplete="off"></label>
+          <label>Favorecido<input name="pix_favorecido"></label>
+          <label class="wide">Descrição<textarea name="descricao"></textarea></label>
+          <div class="actions"><button type="submit">Criar evento</button><span class="message" id="event-message"></span></div>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Eventos cadastrados</h2>
+        <div id="event-list">Carregando…</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Novo lote</h2>
+      <form id="lot-form">
+        <label>Evento<select name="evento" id="event-select" required></select></label>
+        <label>Nome do lote<input name="nome" placeholder="Primeiro lote" required></label>
+        <label>Valor em reais<input name="valor" type="number" min="0" step="0.01" required></label>
+        <label>Quantidade<input name="quantidade_total" type="number" min="1" required></label>
+        <label>Início<input name="inicio" type="datetime-local"></label>
+        <label>Fim<input name="fim" type="datetime-local"></label>
+        <label>Status<select name="status"><option value="futuro">Futuro</option><option value="disponivel">Disponível</option><option value="encerrado">Encerrado</option></select></label>
+        <label>Limite por comprador<input name="limite_por_comprador" type="number" min="1" value="5"></label>
+        <div class="actions"><button type="submit">Criar lote</button><span class="message" id="lot-message"></span></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Pagamentos aguardando análise</h2>
+      <div id="payment-list">Carregando…</div>
+    </section>
+
+    <section class="card">
+      <h2>Check-in na entrada</h2>
+      <form id="check-in-form">
+        <label>Evento<select name="evento" id="check-in-event-select" required></select></label>
+        <label>Documento ou protocolo<input name="busca" placeholder="CPF, RG ou ING-..." autocomplete="off" required></label>
+        <div class="actions"><button type="submit">Localizar ingresso</button><span class="message" id="check-in-message"></span></div>
+      </form>
+      <div id="check-in-result" hidden></div>
+    </section>
+  </main>
+  <script>
+    const eventForm = document.querySelector('#event-form');
+    const lotForm = document.querySelector('#lot-form');
+    const eventList = document.querySelector('#event-list');
+    const eventSelect = document.querySelector('#event-select');
+    const paymentList = document.querySelector('#payment-list');
+    const checkInForm = document.querySelector('#check-in-form');
+    const checkInEventSelect = document.querySelector('#check-in-event-select');
+    const checkInResult = document.querySelector('#check-in-result');
+
+    function showMessage(id, text, ok) {
+      const element = document.querySelector(id);
+      element.textContent = text;
+      element.className = `message ${ok ? 'ok' : 'error'}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+      })[character]);
+    }
+
+    async function refreshEvents() {
+      const response = await fetch('/eventos');
+      const { eventos } = await response.json();
+      eventList.innerHTML = eventos.map((event) => `
+        <div class="event">
+          <strong>${escapeHtml(event.nome)}</strong>
+          <span><code>${escapeHtml(event.codigo)}</code> · ${escapeHtml(event.data_evento)} · ${escapeHtml(event.local)}</span>
+          <span class="pill">${escapeHtml(event.status)}</span>
+          <div class="event-actions">
+            <a href="/admin/eventos/${encodeURIComponent(event.codigo)}/participantes-confirmados" target="_blank" rel="noopener">Ver confirmados</a>
+            <a href="/admin/eventos/${encodeURIComponent(event.codigo)}/exportar-participantes.csv">Exportar para Excel</a>
+          </div>
+        </div>
+      `).join('') || 'Nenhum evento cadastrado.';
+      eventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
+      checkInEventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
+    }
+
+    async function refreshPayments() {
+      const response = await fetch('/admin/pedidos?status_pagamento=em_analise');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.erro);
+      paymentList.innerHTML = result.pedidos.map((order) => `
+        <div class="payment">
+          <div><strong>${escapeHtml(order.protocolo)}</strong><p>${escapeHtml(order.evento_nome)} · ${order.quantidade} ingresso(s) · R$ ${escapeHtml(order.valor_total)}</p><p>Comprador: ${escapeHtml(order.comprador_nome)}</p></div>
+          <div class="payment-actions">
+            <a href="/admin/comprovantes/${encodeURIComponent(order.comprovante_id)}" target="_blank" rel="noopener">Ver comprovante</a>
+            <button data-order="${order.id}" data-decision="aprovar">Aprovar</button>
+            <button class="reject" data-order="${order.id}" data-decision="recusar">Recusar</button>
+          </div>
+        </div>
+      `).join('') || 'Nenhum pagamento aguardando análise.';
+    }
+
+    paymentList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-order]');
+      if (!button) return;
+      const decisao = button.dataset.decision;
+      const observacao = decisao === 'recusar' ? (prompt('Informe o motivo da recusa:') || '') : '';
+      if (decisao === 'recusar' && !observacao) return;
+      if (!confirm(`Deseja ${decisao} este pagamento?`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/admin/pedidos/${button.dataset.order}/pagamento`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decisao, observacao, responsavel: 'Administrador local' }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        await refreshPayments();
+      } catch (error) { alert(error.message); button.disabled = false; }
+    });
+
+    checkInForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = checkInForm.querySelector('button');
+      const data = Object.fromEntries(new FormData(checkInForm));
+      button.disabled = true;
+      checkInResult.hidden = true;
+      showMessage('#check-in-message', 'Consultando…', true);
+      try {
+        const response = await fetch(`/admin/eventos/${encodeURIComponent(data.evento)}/check-in?busca=${encodeURIComponent(data.busca)}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        const participant = result.participante;
+        const alreadyUsed = participant.status_ingresso === 'utilizado';
+        checkInResult.className = `check-in-result ${alreadyUsed ? 'used' : ''}`;
+        checkInResult.innerHTML = `
+          <strong>${escapeHtml(participant.nome_completo)}</strong>
+          <p>${escapeHtml(participant.tipo_documento)}: ${escapeHtml(participant.numero_documento)}</p>
+          <p>Protocolo: ${escapeHtml(participant.protocolo)} · Lote: ${escapeHtml(participant.lote_nome || '-')}</p>
+          <p>Status: ${escapeHtml(participant.status_ingresso)}${participant.entrada_em ? ` · entrada em ${escapeHtml(new Date(participant.entrada_em).toLocaleString('pt-BR'))}` : ''}</p>
+          ${alreadyUsed ? '<strong>Entrada já registrada. Não libere novamente.</strong>' : `<button type="button" data-check-in="${participant.participante_id}">Confirmar entrada</button>`}
+        `;
+        checkInResult.hidden = false;
+        showMessage('#check-in-message', alreadyUsed ? 'Ingresso já utilizado.' : 'Ingresso válido encontrado.', !alreadyUsed);
+      } catch (error) {
+        showMessage('#check-in-message', error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    checkInResult.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-check-in]');
+      if (!button || !confirm('Confirmar a entrada deste participante?')) return;
+      const eventCode = checkInEventSelect.value;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/admin/eventos/${encodeURIComponent(eventCode)}/check-in`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participante_id: Number(button.dataset.checkIn) }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        checkInResult.className = 'check-in-result success';
+        checkInResult.innerHTML = `<strong>Entrada confirmada</strong><p>${escapeHtml(result.participante)}</p><p>${escapeHtml(new Date(result.entrada_em).toLocaleString('pt-BR'))}</p>`;
+        showMessage('#check-in-message', 'Check-in realizado com sucesso.', true);
+      } catch (error) {
+        showMessage('#check-in-message', error.message, false);
+        button.disabled = false;
+      }
+    });
+
+    eventForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = eventForm.querySelector('button');
+      button.disabled = true;
+      const body = Object.fromEntries(new FormData(eventForm));
+      body.capacidade_total = Number(body.capacidade_total);
+      body.limite_por_comprador = Number(body.limite_por_comprador);
+      body.prazo_reserva_minutos = Number(body.prazo_reserva_minutos);
+      try {
+        const response = await fetch('/admin/eventos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        showMessage('#event-message', `Evento ${result.codigo} criado.`, true);
+        eventForm.reset();
+        await refreshEvents();
+      } catch (error) { showMessage('#event-message', error.message, false); }
+      finally { button.disabled = false; }
+    });
+
+    lotForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = lotForm.querySelector('button');
+      button.disabled = true;
+      const body = Object.fromEntries(new FormData(lotForm));
+      const eventCode = body.evento;
+      delete body.evento;
+      body.valor_centavos = Math.round(Number(body.valor) * 100);
+      delete body.valor;
+      body.quantidade_total = Number(body.quantidade_total);
+      body.limite_por_comprador = Number(body.limite_por_comprador);
+      try {
+        const response = await fetch(`/admin/eventos/${encodeURIComponent(eventCode)}/lotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        showMessage('#lot-message', `Lote criado no evento ${result.evento}.`, true);
+        lotForm.reset();
+      } catch (error) { showMessage('#lot-message', error.message, false); }
+      finally { button.disabled = false; }
+    });
+
+    refreshEvents().catch(() => { eventList.textContent = 'Não foi possível carregar os eventos.'; });
+    refreshPayments().catch(() => { paymentList.textContent = 'Não foi possível carregar os pagamentos.'; });
+  </script>
+</body>
+</html>

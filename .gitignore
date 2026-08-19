@@ -1,0 +1,34 @@
+# Segredos e configuracoes locais
+.env
+.env.*
+!.env.example
+
+# Dados internos do n8n
+.n8n/
+n8n_data/
+*.sqlite
+*.sqlite3
+*.db
+
+# Credenciais e exportacoes sensiveis
+credentials/
+credentials*.json
+exports/credentials/
+backups/
+
+# Dados reais coletados
+planilha/dados/
+data/
+
+# Arquivos temporarios e registros
+work/
+outputs/
+*.log
+*.tmp
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+

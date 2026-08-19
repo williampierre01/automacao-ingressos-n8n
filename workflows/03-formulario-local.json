@@ -1,0 +1,93 @@
+{
+  "id": "formularioLocal0001",
+  "name": "03 - Formulario local de atendimento",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "none",
+        "formTitle": "Simulacao de atendimento",
+        "formDescription": "Preencha os dados abaixo para simular uma mensagem recebida pelo WhatsApp.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Nome",
+              "fieldName": "nome",
+              "fieldType": "text",
+              "placeholder": "Digite o nome",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Telefone",
+              "fieldName": "telefone",
+              "fieldType": "text",
+              "placeholder": "Exemplo: 5511999999999",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Mensagem",
+              "fieldName": "mensagem",
+              "fieldType": "textarea",
+              "placeholder": "Digite a mensagem recebida",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "buttonLabel": "Enviar atendimento",
+          "respondWithOptions": {
+            "values": {
+              "respondWith": "text",
+              "formSubmittedText": "Atendimento recebido e enviado para processamento."
+            }
+          }
+        }
+      },
+      "id": "a280c881-f54d-4526-9447-1986e253ff1d",
+      "name": "Receber formulario",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [-320, 0],
+      "webhookId": "e286326c-a54f-45b0-b0f4-59360eb06836"
+    },
+    {
+      "parameters": {
+        "jsCode": "const entrada = $input.first().json;\n\nreturn [{\n  json: {\n    data_hora: new Date().toISOString(),\n    telefone: entrada.telefone,\n    nome: entrada.nome,\n    mensagem: entrada.mensagem,\n    origem: 'formulario_local',\n    status: 'recebido',\n    resposta: `Ola, ${entrada.nome}! Seus dados foram recebidos.`\n  }\n}];"
+      },
+      "id": "05248d79-10f4-4ac9-a002-011789af053a",
+      "name": "Preparar registro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-40, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/atendimentos",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "318783e1-6997-4f7c-a310-32543018cc77",
+      "name": "Salvar na API local",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0]
+    }
+  ],
+  "connections": {
+    "Receber formulario": {
+      "main": [[{"node": "Preparar registro", "type": "main", "index": 0}]]
+    },
+    "Preparar registro": {
+      "main": [[{"node": "Salvar na API local", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}
