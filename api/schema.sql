@@ -26,8 +26,11 @@ CREATE TABLE IF NOT EXISTS eventos (
   inicio_vendas TEXT,
   fim_vendas TEXT,
   capacidade_total INTEGER NOT NULL CHECK (capacidade_total >= 0),
+  capacidade_maxima_evento INTEGER CHECK (capacidade_maxima_evento IS NULL OR capacidade_maxima_evento >= 0),
   limite_por_comprador INTEGER NOT NULL DEFAULT 5 CHECK (limite_por_comprador > 0),
-  prazo_reserva_minutos INTEGER NOT NULL DEFAULT 30 CHECK (prazo_reserva_minutos > 0),
+  max_ingressos_por_pessoa INTEGER DEFAULT 10 CHECK (max_ingressos_por_pessoa IS NULL OR max_ingressos_por_pessoa > 0),
+  prazo_reserva_minutos INTEGER NOT NULL DEFAULT 60 CHECK (prazo_reserva_minutos > 0),
+  descontos_quantidade_json TEXT NOT NULL DEFAULT '',
   pix_chave TEXT NOT NULL DEFAULT '',
   pix_tipo TEXT NOT NULL DEFAULT '',
   pix_favorecido TEXT NOT NULL DEFAULT '',
@@ -55,6 +58,9 @@ CREATE TABLE IF NOT EXISTS lotes (
   quantidade_reservada INTEGER NOT NULL DEFAULT 0 CHECK (quantidade_reservada >= 0),
   quantidade_vendida INTEGER NOT NULL DEFAULT 0 CHECK (quantidade_vendida >= 0),
   limite_por_comprador INTEGER CHECK (limite_por_comprador IS NULL OR limite_por_comprador > 0),
+  ativo INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+  ordem INTEGER NOT NULL DEFAULT 0,
+  encerrado_em TEXT,
   status TEXT NOT NULL DEFAULT 'futuro' CHECK (
     status IN ('futuro', 'disponivel', 'encerrado', 'esgotado')
   ),
@@ -76,6 +82,7 @@ CREATE TABLE IF NOT EXISTS pedidos (
   valor_unitario_centavos INTEGER NOT NULL CHECK (valor_unitario_centavos >= 0),
   valor_total_centavos INTEGER NOT NULL CHECK (valor_total_centavos >= 0),
   reserva_expira_em TEXT,
+  recebido_apos_expirar INTEGER NOT NULL DEFAULT 0 CHECK (recebido_apos_expirar IN (0, 1)),
   status TEXT NOT NULL CHECK (
     status IN (
       'iniciado', 'aguardando_dados', 'aguardando_confirmacao', 'reserva_criada',
@@ -99,8 +106,8 @@ CREATE TABLE IF NOT EXISTS participantes (
   pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
   evento_id INTEGER NOT NULL REFERENCES eventos(id),
   nome_completo TEXT NOT NULL,
-  tipo_documento TEXT NOT NULL CHECK (tipo_documento IN ('CPF', 'RG')),
-  numero_documento TEXT NOT NULL,
+  tipo_documento TEXT CHECK (tipo_documento IS NULL OR tipo_documento IN ('CPF', 'RG')),
+  numero_documento TEXT,
   status_ingresso TEXT NOT NULL DEFAULT 'pendente' CHECK (
     status_ingresso IN ('pendente', 'valido', 'cancelado', 'utilizado')
   ),
@@ -143,3 +150,18 @@ CREATE INDEX IF NOT EXISTS idx_pedidos_telefone ON pedidos(comprador_telefone);
 CREATE INDEX IF NOT EXISTS idx_participantes_documento ON participantes(evento_id, tipo_documento, numero_documento);
 CREATE INDEX IF NOT EXISTS idx_conversas_evento_telefone ON conversas(evento_id, telefone);
 CREATE INDEX IF NOT EXISTS idx_comprovantes_pedido ON comprovantes(pedido_id);
+
+CREATE TABLE IF NOT EXISTS viradas_lote (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  evento_id INTEGER NOT NULL REFERENCES eventos(id),
+  lote_anterior_id INTEGER NOT NULL REFERENCES lotes(id),
+  lote_novo_id INTEGER REFERENCES lotes(id),
+  pedido_id INTEGER NOT NULL REFERENCES pedidos(id),
+  tipo TEXT NOT NULL CHECK (tipo IN ('virada', 'esgotado')),
+  criado_em TEXT NOT NULL,
+  enviado_em TEXT,
+  erro TEXT,
+  anunciada_em TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_viradas_pendentes ON viradas_lote(anunciada_em, id);
