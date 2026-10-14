@@ -17,7 +17,7 @@
     h2 { margin: 0 0 18px; font-size: 19px; }
     form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     label { display: grid; gap: 6px; font-size: 13px; color: #53615c; }
-    label.wide { grid-column: 1 / -1; }
+    label.wide, form .wide { grid-column: 1 / -1; }
     input, select, textarea { width: 100%; padding: 11px 12px; border: 1px solid #ccd8d3; border-radius: 9px; font: inherit; background: white; }
     textarea { min-height: 76px; resize: vertical; }
     button { padding: 12px 18px; border: 0; border-radius: 9px; background: #075e54; color: white; font-weight: 700; cursor: pointer; }
@@ -43,6 +43,11 @@
     .check-in-result p { margin: 5px 0; color: #53615c; }
     .check-in-result.used { border-color: #E0A33A; background: #FFF8E8; }
     .check-in-result.success { border-color: #35A86B; background: #EAF8F0; }
+    .alert { background: #fff4d6; border: 2px solid #e0a33a; }
+    .alert h2 { color: #8a5a00; }
+    .alert article { padding: 12px 0; border-bottom: 1px solid #efd59a; }
+    .alert article:last-child { border-bottom: 0; }
+    .badge { display: inline-block; margin-top: 6px; padding: 4px 8px; border-radius: 999px; background: #a82c26; color: white; font-size: 12px; font-weight: 700; }
     code { color: #075e54; }
     @media (max-width: 800px) { .grid, form { grid-template-columns: 1fr; } label.wide, .actions { grid-column: auto; } }
   </style>
@@ -53,6 +58,10 @@
     <p>Cadastre eventos e lotes sem alterar o fluxo do n8n.</p>
   </header>
   <main>
+    <section class="card alert" id="lot-alert" hidden>
+      <h2>Virada de lote</h2>
+      <div id="lot-alert-list"></div>
+    </section>
     <section class="grid">
       <div class="card">
         <h2>Novo evento</h2>
@@ -63,8 +72,10 @@
           <label>Horário<input name="horario" type="time"></label>
           <label>Local<input name="local" required></label>
           <label>Capacidade<input name="capacidade_total" type="number" min="1" value="300" required></label>
-          <label>Limite por comprador<input name="limite_por_comprador" type="number" min="1" value="5"></label>
-          <label>Reserva em minutos<input name="prazo_reserva_minutos" type="number" min="1" value="30"></label>
+          <label>Teto do evento<input name="capacidade_maxima_evento" type="number" min="0" placeholder="vazio = sem teto"></label>
+          <label>Máximo por telefone<input name="max_ingressos_por_pessoa" type="number" min="1" value="10" placeholder="vazio = sem limite"></label>
+          <label>Reserva em minutos<input name="prazo_reserva_minutos" type="number" min="1" value="60"></label>
+          <label class="wide">Desconto por quantidade<input name="descontos_quantidade_json" placeholder='[{"min":3,"percentual":10}]'></label>
           <label>Status<select name="status"><option value="rascunho">Rascunho</option><option value="vendas_abertas">Vendas abertas</option><option value="vendas_pausadas">Vendas pausadas</option></select></label>
           <label>Organizador<input name="organizador"></label>
           <label>Chave Pix<input name="pix_chave" autocomplete="off"></label>
@@ -88,8 +99,9 @@
         <label>Quantidade<input name="quantidade_total" type="number" min="1" required></label>
         <label>Início<input name="inicio" type="datetime-local"></label>
         <label>Fim<input name="fim" type="datetime-local"></label>
-        <label>Status<select name="status"><option value="futuro">Futuro</option><option value="disponivel">Disponível</option><option value="encerrado">Encerrado</option></select></label>
-        <label>Limite por comprador<input name="limite_por_comprador" type="number" min="1" value="5"></label>
+        <p class="wide">Início e fim ficam gravados. A virada usa a quantidade vendida, não a data.</p>
+        <label>Status<select name="status"><option value="futuro">Futuro</option><option value="disponivel" selected>Disponível</option><option value="encerrado">Encerrado</option></select></label>
+        <label>Ativo<select name="ativo"><option value="1" selected>Sim</option><option value="0">Não, pausar vendas</option></select></label>
         <div class="actions"><button type="submit">Criar lote</button><span class="message" id="lot-message"></span></div>
       </form>
     </section>
@@ -160,6 +172,8 @@
     const eventList = document.querySelector('#event-list');
     const eventSelect = document.querySelector('#event-select');
     const paymentList = document.querySelector('#payment-list');
+    const lotAlert = document.querySelector('#lot-alert');
+    const lotAlertList = document.querySelector('#lot-alert-list');
     const checkInForm = document.querySelector('#check-in-form');
     const checkInEventSelect = document.querySelector('#check-in-event-select');
     const checkInResult = document.querySelector('#check-in-result');
@@ -194,13 +208,44 @@
       checkInEventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
     }
 
+    async function refreshViradas() {
+      const response = await adminFetch('/admin/viradas');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.erro);
+      const viradas = result.viradas || [];
+      lotAlert.hidden = viradas.length === 0;
+      lotAlertList.innerHTML = viradas.map((virada) => `
+        <article>
+          <strong>${escapeHtml(virada.evento_nome)}</strong>
+          <p>${virada.tipo === 'esgotado' ? 'Evento esgotado' : 'Lote virou'}: ${escapeHtml(virada.lote_anterior)} → ${escapeHtml(virada.lote_novo || 'sem próximo lote')}</p>
+          <p>${escapeHtml(new Date(virada.criado_em).toLocaleString('pt-BR'))}${virada.erro ? ` · webhook: ${escapeHtml(virada.erro)}` : ''}</p>
+          <button type="button" data-anunciar="${virada.id}">Marcar como anunciada</button>
+        </article>
+      `).join('');
+    }
+
+    lotAlertList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-anunciar]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const response = await adminFetch(`/admin/viradas/${button.dataset.anunciar}/anunciada`, { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        await refreshViradas();
+      } catch (error) {
+        alert(error.message);
+        button.disabled = false;
+      }
+    });
+
     async function refreshPayments() {
       const response = await adminFetch('/admin/pedidos?status_pagamento=em_analise');
       const result = await response.json();
       if (!response.ok) throw new Error(result.erro);
       paymentList.innerHTML = result.pedidos.map((order) => `
         <div class="payment">
-          <div><strong>${escapeHtml(order.protocolo)}</strong><p>${escapeHtml(order.evento_nome)} · ${order.quantidade} ingresso(s) · R$ ${escapeHtml(order.valor_total)}</p><p>Comprador: ${escapeHtml(order.comprador_nome)}</p></div>
+          <div><strong>${escapeHtml(order.protocolo)}</strong><p>${escapeHtml(order.evento_nome)} · ${order.quantidade} ingresso(s) · R$ ${escapeHtml(order.valor_total)}</p><p>Comprador: ${escapeHtml(order.comprador_nome)}</p>${Number(order.recebido_apos_expirar) === 1 ? '<span class="badge">Recebido após expirar</span>' : ''}</div>
           <div class="payment-actions">
             <button type="button" class="link" data-open="/admin/comprovantes/${encodeURIComponent(order.comprovante_id)}">Ver comprovante</button>
             <button data-order="${order.id}" data-decision="aprovar">Aprovar</button>
@@ -242,6 +287,7 @@
         const result = await response.json();
         if (!response.ok) throw new Error(result.erro);
         await refreshPayments();
+        await refreshViradas();
       } catch (error) { alert(error.message); button.disabled = false; }
     });
 
@@ -303,7 +349,8 @@
       button.disabled = true;
       const body = Object.fromEntries(new FormData(eventForm));
       body.capacidade_total = Number(body.capacidade_total);
-      body.limite_por_comprador = Number(body.limite_por_comprador);
+      body.max_ingressos_por_pessoa = body.max_ingressos_por_pessoa === '' ? null : Number(body.max_ingressos_por_pessoa);
+      body.capacidade_maxima_evento = body.capacidade_maxima_evento === '' ? null : Number(body.capacidade_maxima_evento);
       body.prazo_reserva_minutos = Number(body.prazo_reserva_minutos);
       try {
         const response = await adminFetch('/admin/eventos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -326,7 +373,7 @@
       body.valor_centavos = Math.round(Number(body.valor) * 100);
       delete body.valor;
       body.quantidade_total = Number(body.quantidade_total);
-      body.limite_por_comprador = Number(body.limite_por_comprador);
+      body.ativo = body.ativo === '0' ? 0 : 1;
       try {
         const response = await adminFetch(`/admin/eventos/${encodeURIComponent(eventCode)}/lotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const result = await response.json();
@@ -340,6 +387,7 @@
     ensureToken();
     refreshEvents().catch(() => { eventList.textContent = 'Não foi possível carregar os eventos.'; });
     refreshPayments().catch((error) => { paymentList.textContent = error.message; });
+    refreshViradas().catch((error) => { lotAlert.hidden = false; lotAlertList.textContent = error.message; });
   </script>
 </body>
 </html>
