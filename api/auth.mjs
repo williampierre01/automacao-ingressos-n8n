@@ -16,13 +16,19 @@ export function bearerToken(authorizationHeader) {
 }
 
 export function adminAuthorized(authorizationHeader, expectedToken) {
-  return tokensMatch(bearerToken(authorizationHeader), expectedToken);
+  const provided = bearerToken(authorizationHeader);
+  const expected = String(expectedToken ?? '');
+  if (!provided || !expected.trim()) return false;
+  return tokensMatch(provided, expected);
 }
 
 export function requireSecret(name, env = process.env) {
   const value = String(env[name] ?? '').trim();
   if (!value) {
     throw new Error(`${name} nao definido.`);
+  }
+  if (name === 'ADMIN_TOKEN' && value.length < 24) {
+    throw new Error('ADMIN_TOKEN precisa ter pelo menos 24 caracteres.');
   }
   return value;
 }

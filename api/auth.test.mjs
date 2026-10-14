@@ -25,10 +25,21 @@ test('token certo autoriza', () => {
   assert.equal(adminAuthorized('bearer segredo-de-teste', expectedToken), true);
 });
 
-test('segredo vazio impede a inicializacao', () => {
+test('token vazio contra segredo vazio nao autoriza', () => {
+  assert.equal(adminAuthorized(undefined, ''), false);
+  assert.equal(adminAuthorized('', ''), false);
+  assert.equal(adminAuthorized('Bearer', '   '), false);
+});
+
+test('segredo vazio ou curto impede a inicializacao', () => {
+  const adminToken = 'abcdefghijklmnopqrstuvwx';
+  assert.equal(adminToken.length, 24);
   assert.throws(() => requireSecret('ADMIN_TOKEN', {}), /ADMIN_TOKEN nao definido/);
   assert.throws(() => requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: '   ' }), /ADMIN_TOKEN nao definido/);
-  assert.equal(requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: ' abc ' }), 'abc');
+  assert.throws(() => requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: 'abc' }), /pelo menos 24 caracteres/);
+  assert.throws(() => requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: 'a'.repeat(23) }), /pelo menos 24 caracteres/);
+  assert.equal(requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: ` ${adminToken} ` }), adminToken);
+  assert.equal(requireSecret('META_APP_SECRET', { META_APP_SECRET: 'abc' }), 'abc');
 });
 
 test('rotas protegidas respondem 401 ou 200', async () => {
