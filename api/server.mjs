@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { adminAuthorized, requireSecret } from './auth.mjs';
 
 const apiFolder = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(apiFolder);
@@ -25,6 +26,8 @@ const n8nWebhook = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook
 if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
   throw new Error('Informe API_TLS_CERT_PATH e API_TLS_KEY_PATH juntos para ativar HTTPS.');
 }
+
+const adminToken = requireSecret('ADMIN_TOKEN');
 
 mkdirSync(dataFolder, { recursive: true });
 mkdirSync(receiptsFolder, { recursive: true });
@@ -281,6 +284,11 @@ const checkInParticipantStatement = database.prepare(`
   LEFT JOIN lotes l ON l.id = p.lote_id
   WHERE pt.id = ? AND pt.evento_id = ? AND p.status_pagamento = 'aprovado'
 `);
+
+function requiresAdmin(method, pathname) {
+  if (pathname.startsWith('/admin/')) return true;
+  return method === 'GET' && (pathname === '/atendimentos' || pathname === '/exportar');
+}
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
@@ -605,14 +613,21 @@ const requestListener = async (request, response) => {
     response.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     });
     response.end();
     return;
   }
 
+  if (requiresAdmin(request.method, url.pathname)) {
+    if (!adminAuthorized(request.headers.authorization, adminToken)) {
+      sendJson(response, 401, { erro: 'Nao autorizado.' });
+      return;
+    }
+  }
+
   if (request.method === 'GET' && url.pathname === '/saude') {
-    sendJson(response, 200, { status: 'ok', banco: databasePath });
+    sendJson(response, 200, { status: 'ok' });
     return;
   }
 

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { dirname } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 
 const expectedToken = 'segredo-de-teste';
@@ -54,4 +57,24 @@ test('rotas protegidas respondem 401 ou 200', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('a API nao sobe sem ADMIN_TOKEN', async () => {
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const child = spawn(process.execPath, ['api/server.mjs'], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      ADMIN_TOKEN: '',
+    },
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.notEqual(code, 0);
+  assert.match(stderr, /ADMIN_TOKEN nao definido/);
 });
