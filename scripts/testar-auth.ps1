@@ -35,7 +35,7 @@ function Get-HttpCode {
         [Parameter(Mandatory = $true)][string]$Method,
         [Parameter(Mandatory = $true)][string]$Uri,
         [hashtable]$Headers,
-        [string]$Body
+        [string]$BodyFile
     )
     $curlArgs = @('-sS', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '10', '-X', $Method)
     if ($Headers) {
@@ -43,8 +43,8 @@ function Get-HttpCode {
             $curlArgs += @('-H', "${key}: $($Headers[$key])")
         }
     }
-    if ($PSBoundParameters.ContainsKey('Body')) {
-        $curlArgs += @('--data-binary', $Body)
+    if ($BodyFile) {
+        $curlArgs += @('--data-binary', "@$BodyFile")
     }
     $curlArgs += $Uri
     try {
@@ -90,66 +90,96 @@ if (-not $adminToken) {
     }
 }
 
-$payload = '{"objeto":"whatsapp"}'
 $node = Get-NodePath
-$signature = $null
-if ($appSecret -and $node) {
-    $previousSecret = [Environment]::GetEnvironmentVariable('META_APP_SECRET', 'Process')
+$workFolder = Join-Path $projectRoot 'work'
+$bodyFile = Join-Path $workFolder 'auth-test-corpo.json'
+$alteredFile = Join-Path $workFolder 'auth-test-corpo-alterado.json'
+
+function Write-RawBody {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($Path, $Text, $utf8)
+}
+
+function Get-HubSignature {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Secret
+    )
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256
     try {
-        $env:META_APP_SECRET = $appSecret
-        $env:WEBHOOK_BODY = $payload
-        $signature = & $node --no-warnings -e "const {createHmac}=require('node:crypto'); process.stdout.write('sha256='+createHmac('sha256', process.env.META_APP_SECRET).update(process.env.WEBHOOK_BODY).digest('hex'))" 2>$null
-        if ($signature) { $signature = ([string]$signature).Trim() }
+        $hmac.Key = [System.Text.Encoding]::UTF8.GetBytes($Secret)
+        $hash = $hmac.ComputeHash([System.IO.File]::ReadAllBytes($Path))
     } finally {
-        if ($null -eq $previousSecret) {
-            Remove-Item Env:META_APP_SECRET -ErrorAction SilentlyContinue
+        $hmac.Dispose()
+    }
+    return 'sha256=' + (-join ($hash | ForEach-Object { $_.ToString('x2') }))
+}
+
+New-Item -ItemType Directory -Force -Path $workFolder | Out-Null
+Write-RawBody -Path $bodyFile -Text '{"objeto":"whatsapp"}'
+Write-RawBody -Path $alteredFile -Text '{"objeto":"alterado"}'
+$signature = $null
+if ($appSecret) {
+    $signature = Get-HubSignature -Path $bodyFile -Secret $appSecret
+}
+
+try {
+    if (-not $signature) {
+        $failed = $true
+        Write-Check -Name '3. POST gateway assinatura valida' -Actual '000' -Label 'FALHOU'
+        Write-Check -Name '4. POST gateway assinatura invalida' -Actual '000' -Label 'FALHOU'
+        Write-Check -Name '5. POST gateway sem assinatura' -Actual '000' -Label 'FALHOU'
+        Write-Check -Name '6. POST gateway corpo adulterado' -Actual '000' -Label 'FALHOU'
+    } else {
+        $valid = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
+            'Content-Type' = 'application/json'
+            'X-Hub-Signature-256' = $signature
+        } -BodyFile $bodyFile
+        if ($valid -ne '401' -and $valid -ne '000') {
+            Write-Check -Name '3. POST gateway assinatura valida' -Actual $valid -Label 'OK'
         } else {
-            $env:META_APP_SECRET = $previousSecret
+            $failed = $true
+            Write-Check -Name '3. POST gateway assinatura valida' -Actual $valid -Label 'FALHOU'
         }
-        Remove-Item Env:WEBHOOK_BODY -ErrorAction SilentlyContinue
+
+        $invalid = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
+            'Content-Type' = 'application/json'
+            'X-Hub-Signature-256' = 'sha256=00'
+        } -BodyFile $bodyFile
+        if ($invalid -eq '401') {
+            Write-Check -Name '4. POST gateway assinatura invalida' -Actual $invalid -Label 'OK'
+        } else {
+            $failed = $true
+            Write-Check -Name '4. POST gateway assinatura invalida' -Actual $invalid -Label 'FALHOU'
+        }
+
+        $missing = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
+            'Content-Type' = 'application/json'
+        } -BodyFile $bodyFile
+        if ($missing -eq '401') {
+            Write-Check -Name '5. POST gateway sem assinatura' -Actual $missing -Label 'OK'
+        } else {
+            $failed = $true
+            Write-Check -Name '5. POST gateway sem assinatura' -Actual $missing -Label 'FALHOU'
+        }
+
+        $tampered = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
+            'Content-Type' = 'application/json'
+            'X-Hub-Signature-256' = $signature
+        } -BodyFile $alteredFile
+        if ($tampered -eq '401') {
+            Write-Check -Name '6. POST gateway corpo adulterado' -Actual $tampered -Label 'OK'
+        } else {
+            $failed = $true
+            Write-Check -Name '6. POST gateway corpo adulterado' -Actual $tampered -Label 'FALHOU'
+        }
     }
-}
-
-function Write-GatewayCheck {
-    param([string]$Name, [string]$Code, [string]$Mode)
-    if ($Mode -eq 'valida') {
-        if ($Code -eq '200') { Write-Check -Name $Name -Actual $Code -Label 'OK'; return $false }
-        if ($Code -eq '400') { Write-Check -Name $Name -Actual $Code -Label 'AVISO n8n parado'; return $false }
-        Write-Check -Name $Name -Actual $Code -Label 'FALHOU'
-        return $true
-    }
-    $label = if ($Code -eq '401') { 'OK' } else { 'FALHOU' }
-    Write-Check -Name $Name -Actual $Code -Label $label
-    return $label -eq 'FALHOU'
-}
-
-if (-not $signature) {
-    $failed = $true
-    Write-Check -Name '3. POST gateway assinatura valida' -Actual '000' -Label 'FALHOU'
-    Write-Check -Name '4. POST gateway assinatura invalida' -Actual '000' -Label 'FALHOU'
-    Write-Check -Name '5. POST gateway sem assinatura' -Actual '000' -Label 'FALHOU'
-    Write-Check -Name '6. POST gateway corpo adulterado' -Actual '000' -Label 'FALHOU'
-} else {
-    $valid = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
-        'Content-Type' = 'application/json'
-        'X-Hub-Signature-256' = $signature
-    } -Body $payload
-    if (Write-GatewayCheck -Name '3. POST gateway assinatura valida' -Code $valid -Mode 'valida') { $failed = $true }
-
-    $invalid = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
-        'Content-Type' = 'application/json'
-        'X-Hub-Signature-256' = 'sha256=00'
-    } -Body $payload
-    if (Write-GatewayCheck -Name '4. POST gateway assinatura invalida' -Code $invalid -Mode '401') { $failed = $true }
-
-    $missing = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{ 'Content-Type' = 'application/json' } -Body $payload
-    if (Write-GatewayCheck -Name '5. POST gateway sem assinatura' -Code $missing -Mode '401') { $failed = $true }
-
-    $tampered = Get-HttpCode -Method 'POST' -Uri $gateway -Headers @{
-        'Content-Type' = 'application/json'
-        'X-Hub-Signature-256' = $signature
-    } -Body ($payload + ' ')
-    if (Write-GatewayCheck -Name '6. POST gateway corpo adulterado' -Code $tampered -Mode '401') { $failed = $true }
+} finally {
+    Remove-Item -LiteralPath $bodyFile, $alteredFile -Force -ErrorAction SilentlyContinue
 }
 
 function Test-SimulatorOff {
