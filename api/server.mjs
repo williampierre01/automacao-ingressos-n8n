@@ -22,6 +22,7 @@ const httpsPort = Number(process.env.API_HTTPS_PORT || 8443);
 const tlsCertificatePath = process.env.API_TLS_CERT_PATH || '';
 const tlsKeyPath = process.env.API_TLS_KEY_PATH || '';
 const n8nWebhook = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook/whatsapp-mensagens';
+const simulatorEnabled = process.env.SIMULADOR_ATIVO === '1';
 
 if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
   throw new Error('Informe API_TLS_CERT_PATH e API_TLS_KEY_PATH juntos para ativar HTTPS.');
@@ -632,6 +633,10 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/simulador')) {
+    if (!simulatorEnabled) {
+      sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+      return;
+    }
     try {
       const html = readFileSync(simulatorPath, 'utf8');
       response.writeHead(200, {
@@ -1137,6 +1142,10 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/simular-mensagem') {
+    if (!simulatorEnabled) {
+      sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+      return;
+    }
     try {
       const body = await readJson(request);
       const payload = {
