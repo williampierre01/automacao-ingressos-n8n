@@ -20,6 +20,7 @@ O cliente inicia a conversa no WhatsApp; um atendimento no n8n (máquina de esta
 - [ ] Cada status webhook grava `pricing.billable` / `type` / `category` em `mensagens_custo`; existe relatório mensal.
 - [ ] Bot agrupa respostas; respeita janela de 24h; avisa antes de expirar; não envia template pago sem decisão explícita.
 - [ ] Fora de escopo: campanhas/disparos a lista de leads — não implementado.
+- [ ] Há testes automatizados (`node --test`) para preço/lote, máquina de estados, idempotência e validação HMAC.
 
 ## Gap — tarefas ordenadas (arquivos afetados)
 
@@ -120,7 +121,7 @@ Ordem pensada para não construir IA/OCR em cima de schema e segurança furados.
 | # | Item | Viabilidade | Esforço | Risco | Arquivos | Conta/domínio/pago |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Pix sem API bancária: pasta OFX/CSV no n8n + centavos únicos; OCR só triagem | Alta para PF (extrato do app). Centavos únicos exigem valor com quebra (ex. 50,01) — precisa aceite do comprador | Médio | Médio: atraso do extrato; mismatch de nome; dois pedidos mesmo valor | `api/schema.sql` (valor cobrado vs face), `api/server.mjs`, `workflows/` (watch folder), pasta `data/extratos/` | Conta banco (já tem). Sem Open Finance. **Sinalizar:** formato OFX/CSV varia por banco |
-| 2 | BR Code / Pix copia-e-cola com valor da API | Alta (payload EMV estático/dinâmico **sem** PSP se a chave for CPF/email/aleatória). QR é string; gerar imagem é local | Baixo–médio | Sem CNPJ não há cobrança “Pix automático” da instituição; é só instrução de pagamento. Valor precisa bater com E.1 | `api/server.mjs`, possivelmente `web/` | Nenhum, se chave Pix pessoal já existir |
+| 2 | BR Code / Pix copia-e-cola com valor da API | Sem CNPJ só BR Code estático; dinâmico exige PSP. QR estático é string; gerar imagem é local | Baixo–médio | Valor precisa bater com E.1. Dinâmico sem PSP não é viável | `api/server.mjs`, possivelmente `web/` | Estático: nenhum, se chave Pix pessoal já existir. Dinâmico: conta de PSP |
 | 3 | Túnel webhook | **Quick Cloudflare:** já no repo; URL muda a cada restart — Meta quebra. **Named Cloudflare Tunnel:** URL estável, grátis, **exige conta Cloudflare + domínio**. **Hookdeck/Webhook Relay:** conta, plano free com limite de eventos/retenção | Quick: já feito. Named: médio (DNS). Hookdeck: baixo | Quick inaceitável em “produção”. Named é o único estável a custo 0 se houver domínio | `scripts/iniciar-tunel-whatsapp.ps1`, docs | **Named: conta + domínio.** Hookdeck: conta, teto do free. Quick: só conta Cloudflare opcional |
 | 4 | HMAC, gitleaks, backup SQLite, `n8n export:workflow --all --separate`, alerta Telegram | HMAC: obrigatório (hoje ausente). gitleaks: binário/pre-commit grátis. Backup: Task Scheduler + cópia `data/*.sqlite`. Export n8n: CLI da instância local. Telegram: bot gratuito | Médio no conjunto | HMAC mal configurado derruba o webhook. Backup sem teste de restore é teatro | `api/whatsapp-gateway.mjs`, `.gitignore`/hooks, `scripts/`, `workflows/` | Telegram: conta + bot. gitleaks: nenhum. Cloudflare HMAC usa App Secret da Meta (conta Meta) |
 | 5 | `.cursor/rules/` com regra de negócio | Alta, local, zero custo | Baixo | Baixo | `.cursor/rules/` | Nenhum |
@@ -133,7 +134,7 @@ Ordem pensada para não construir IA/OCR em cima de schema e segurança furados.
 
 ## Módulo F — Custo e regras do WhatsApp
 
-**Não assumir custo zero.** Docs oficiais da Meta (atualização out/2026): service messages passam a ser cobradas **por mensagem entregue** a partir de 01/10/2026, com **1.000 service messages grátis/mês por número**; o 1.001º cobra tarifa de utility/auth do mercado do destinatário; utility **dentro** da janela 24h também passa a cobrar. Webhooks de status usam `pricing.type` (`free_customer_service` vs `regular`) e `category`. Fontes: [pricing](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing), [non-template](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/non-template-messages.md). Relatos de imprensa (ex. Índia) divergem em valores locais — por isso **gravar o objeto `pricing`**, não uma tabela hardcoded.
+**Não assumir custo zero.** Service messages são cobradas por mensagem desde 01/10/2026 pela tarifa de utility do mercado; a franquia "1.000 grátis" **não** está confirmada na página oficial. Webhooks de status usam `pricing.type` (`free_customer_service` vs `regular`) e `category`. Fontes: [pricing](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing), [non-template](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/non-template-messages.md). Relatos de imprensa divergem em valores locais — por isso **gravar o objeto `pricing`**, não uma tabela hardcoded.
 
 **Hoje:** nenhum envio Cloud API; nenhum `mensagens_custo`; fluxo 04 não trata `statuses[]`.
 

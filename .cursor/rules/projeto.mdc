@@ -1,0 +1,33 @@
+---
+description: Fonte da verdade, regra de negócio, arquitetura e modo de trabalho
+alwaysApply: true
+---
+
+# Projeto de ingressos
+
+## Fonte da verdade
+
+Antes de agir, ler `docs/ESTADO_ATUAL.md` e `docs/OBJETIVO.md`. Esses arquivos são a fonte da verdade.
+
+## Regra de negócio
+
+- Entrada na festa = nome na lista.
+- O nome só entra na lista após comprovante confirmado.
+- O preço depende do lote e da quantidade.
+- O total é sempre calculado na API.
+
+## Arquitetura
+
+- A máquina de estados da venda vive na API (`api/server.mjs`).
+- O n8n só recebe, encaminha e orquestra avisos.
+- O LLM só interpreta texto livre.
+
+## Trabalho
+
+- Um branch por tarefa.
+- Antes de codar, apresentar o plano (arquivos, riscos, como testar) e esperar o OK.
+- Testes com `node --test`. Sem dependências novas sem aprovação.
+- Nunca ler nem imprimir `.env` ou `work/`.
+- Nunca commitar dados reais.
+- Custo mínimo, salvo aprovação.
+- Responder em PT-BR.
