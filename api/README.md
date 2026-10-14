@@ -4,9 +4,9 @@ A API recebe os dados enviados pelo n8n e grava tudo no banco local SQLite em `d
 
 ## Autenticacao
 
-A API so inicia com `ADMIN_TOKEN` no ambiente. Rotas `/admin/*`, `GET /atendimentos` e `GET /exportar` exigem `Authorization: Bearer`. A pagina `GET /admin` pede esse token e o guarda apenas em `sessionStorage`.
+A API so inicia com `ADMIN_TOKEN` de pelo menos 24 caracteres. Rotas `/admin/*`, `GET /atendimentos` e `GET /exportar` exigem `Authorization: Bearer`. A pagina `GET /admin` pede esse token e o guarda apenas em `sessionStorage`.
 
-`GET /saude`, o simulador, o catalogo de eventos, `POST /simular-mensagem`, `POST /comprovantes` e `POST /atendimentos` nao usam esse token.
+`GET /saude`, o catalogo de eventos, `POST /comprovantes` e `POST /atendimentos` nao usam esse token. `GET /`, `GET /simulador` e `POST /simular-mensagem` so existem com `SIMULADOR_ATIVO=1`; sem a flag respondem 404.
 
 ## Enderecos
 

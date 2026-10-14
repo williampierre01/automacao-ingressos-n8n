@@ -29,6 +29,9 @@ foreach ($file in @($envFile, $settingsFile)) {
 }
 
 Set-Location -LiteralPath $projectRoot
+if ($env:API_HTTPS_HOST -eq '0.0.0.0') {
+    Write-Host 'Aviso: API_HTTPS_HOST=0.0.0.0. POST /atendimentos e POST /comprovantes ficam abertos a toda a rede.'
+}
 Write-Host "HTTP interno: http://127.0.0.1:8000"
 Write-Host "HTTPS na rede: https://$($env:API_LOCAL_IP):$($env:API_HTTPS_PORT)"
 & $portableNode --no-warnings $apiFile
