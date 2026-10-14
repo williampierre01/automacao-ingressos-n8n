@@ -41,9 +41,11 @@ Para manter o prototipo sem custos, o usuario inicia a conversa e o atendimento 
 .
 |-- compose.yaml          Alternativa de execucao com Docker
 |-- .env.example          Modelo de configuracao sem segredos
-|-- scripts/              Inicializacao local do n8n
-|-- docs/                 Arquitetura e decisoes do projeto
-|-- planilha/             Definicao futura das colunas
+|-- api/                  API Node + SQLite e gateway WhatsApp
+|-- web/                  admin.html e simulador.html
+|-- scripts/              Inicializacao local (n8n, API, tunel)
+|-- docs/                 Arquitetura, estado atual e plano
+|-- planilha/             Definicao das colunas e exportacoes locais
 `-- workflows/            Fluxos exportados do n8n
 ```
 

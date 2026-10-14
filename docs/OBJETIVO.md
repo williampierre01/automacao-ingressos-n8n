@@ -167,4 +167,4 @@ Começar sem fine-tuning: volume de chats de um evento costuma ser pequeno; anon
 
 Higiene — incluir `contexto_n8n.txt` e pastas de conversas/chats no `.gitignore`, e atualizar a seção Estrutura do `README.md` (listar `api/` e `web/`). Sem mudar comportamento da API.
 
-Estado ao gravar este doc: `contexto_n8n.txt` já está no `.gitignore`. README (Estrutura) e regra para pastas de conversas **ainda não**. Esperar OK antes de qualquer outra implementação.
+**Concluída:** `contexto_n8n.txt`, `conversas/`, `chats/` e `exports/whatsapp/` no `.gitignore`; seção Estrutura do README lista `api/` e `web/`.

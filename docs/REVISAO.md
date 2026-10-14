@@ -34,7 +34,7 @@ Itens checados de propósito: assinatura `X-Hub-Signature-256` e token do webhoo
 | `compose.yaml` usa `n8n:latest`, não 2.34.6, e não sobe a API | `compose.yaml` L3–17 | Caminho principal é Node portátil |
 | README seção **Estrutura** omite `api/` e `web/` | `README.md` L38–47 | Corpo do README menciona API/admin/simulador; a árvore não |
 | Docs ainda citam Google Sheets | `docs/arquitetura.md` L5, L12; `docs/decisoes.md` L7 | Código grava SQLite/CSV |
-| `.gitignore` sem regra explícita para exports de conversas WhatsApp | `.gitignore` | `conversas/`, `exports/whatsapp/` não listados. `contexto_n8n.txt` **foi incluído depois** da revisão (`.gitignore` L22); na revisão original estava ausente |
+| `.gitignore` sem regra explícita para exports de conversas WhatsApp | `.gitignore` | **Corrigido na primeira tarefa:** `conversas/`, `chats/`, `exports/whatsapp/`. `contexto_n8n.txt` já estava coberto |
 | Mídia WhatsApp (imagem/PDF de comprovante) não é interpretada | `workflows/04-webhook-whatsapp-simulado.json` L21 | Só texto, botão e list reply |
 | Estados de pedido no schema ≠ estados alvo | `api/schema.sql` L79–85 vs alvo `aguardando_nomes` / `em_validacao` / `revisao_manual` / `confirmado` | Dívida do módulo A/C |
 | Aprovação de pagamento **não** checa `reserva_expira_em` | `api/server.mjs` L1015–1035 | Pode confirmar pedido já vencido no papel |
@@ -89,12 +89,12 @@ Fluxo linear: webhook → code → HTTP POST `/atendimentos` → respond. Sem ra
 | `*.sqlite` | Sim (L9–11) |
 | `data/` (banco + comprovantes) | Sim (L21) |
 | `planilha/dados/` | Sim (L20) |
-| `contexto_n8n.txt` | Sim **agora** (L22). Na revisão original de 2026-10-12 estava **ausente** |
-| Exportações de conversas / chats | **Não** explícito (`conversas/`, `exports/whatsapp/`) |
+| `contexto_n8n.txt` | Sim (L22). Na revisão original de 2026-10-12 estava **ausente** |
+| Exportações de conversas / chats | Sim: `conversas/`, `chats/`, `exports/whatsapp/` |
 
 ## README desatualizado
 
-`README.md` L38–47 (Estrutura) não lista `api/` nem `web/`. `docs/arquitetura.md` e `docs/decisoes.md` ainda apontam Google Sheets.
+`README.md` seção Estrutura **passa a listar** `api/` e `web/` (primeira tarefa). `docs/arquitetura.md` e `docs/decisoes.md` ainda apontam Google Sheets.
 
 ## Itens marcados “não confirmado”
 

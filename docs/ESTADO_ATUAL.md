@@ -84,8 +84,8 @@ O computador precisa ficar ligado. Integração Meta **não** está concluída n
 | `*.sqlite` | Sim (L9–11) |
 | `data/` (banco + comprovantes) | Sim (L21) |
 | `planilha/dados/` | Sim (L20) |
-| `contexto_n8n.txt` | **Não.** Arquivo existe na raiz e aparece untracked no dump de contexto |
-| Exportações de conversas WhatsApp / pasta de comprovantes alternativa | **Não** há regra explícita (`conversas/`, `*.txt` de chat, `exports/whatsapp/`) |
+| `contexto_n8n.txt` | Sim (`.gitignore`) |
+| Exportações de conversas WhatsApp | Sim: `conversas/`, `chats/`, `exports/whatsapp/` |
 
 ## README desatualizado
 
