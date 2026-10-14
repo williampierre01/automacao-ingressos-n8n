@@ -152,3 +152,19 @@ Ordem pensada para não construir IA/OCR em cima de schema e segurança furados.
 ## Fine-tuning vs prompt/RAG
 
 Começar sem fine-tuning: volume de chats de um evento costuma ser pequeno; anonimização + few-shot + RAG local cobre tom e FAQ; Fine-tune exigiria GPU, pipeline de treino e re-anonimização a cada evento. Só reavaliar se o conjunto de eval (promptfoo) mostrar erro estável de tom/fluxo **depois** de RAG.
+
+---
+
+## Perguntas em aberto
+
+1. **Desconto por quantidade** — existe? Quais faixas?
+2. **Formas de pagamento aceitas** — só Pix? Outras?
+3. **Prazo de reserva do lote** — o código usa 30 min (`prazo_reserva_minutos`). Qual o prazo real?
+4. **Política de reembolso / recusa** — o que falar e o que fazer no estoque/lista?
+5. Extra (não confirmado no código): a portaria ainda precisa de **CPF/RG**, ou a lista é **só nome**? Tem **domínio** para túnel Cloudflare nomeado? A máquina de OCR tem **GPU**?
+
+## Primeira tarefa proposta
+
+Higiene — incluir `contexto_n8n.txt` e pastas de conversas/chats no `.gitignore`, e atualizar a seção Estrutura do `README.md` (listar `api/` e `web/`). Sem mudar comportamento da API.
+
+Estado ao gravar este doc: `contexto_n8n.txt` já está no `.gitignore`. README (Estrutura) e regra para pastas de conversas **ainda não**. Esperar OK antes de qualquer outra implementação.
