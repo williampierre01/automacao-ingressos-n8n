@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireSecret, tokensMatch } from './auth.mjs';
+import { readBody, requestBodyError } from './body.mjs';
 import { verifyHubSignature } from './meta-signature.mjs';
 
 const appSecret = requireSecret('META_APP_SECRET');
@@ -24,26 +25,6 @@ function sendText(response, statusCode, body) {
     'Cache-Control': 'no-store',
   });
   response.end(body);
-}
-
-function readBody(request) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-
-    request.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > 1_000_000) {
-        reject(new Error('Corpo da requisicao muito grande.'));
-        request.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    request.on('end', () => resolve(Buffer.concat(chunks)));
-    request.on('error', reject);
-  });
 }
 
 const server = createServer(async (request, response) => {
@@ -95,7 +76,11 @@ const server = createServer(async (request, response) => {
       });
       response.end(responseBody);
     } catch (error) {
-      sendText(response, 400, `Requisicao invalida: ${error.message}`);
+      const failure = requestBodyError(error);
+      const message = failure.statusCode === 413
+        ? failure.message
+        : `Requisicao invalida: ${failure.message}`;
+      sendText(response, failure.statusCode, message);
     }
     return;
   }
