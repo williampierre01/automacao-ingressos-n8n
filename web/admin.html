@@ -32,13 +32,12 @@
     .event span { margin-top: 4px; color: #62706b; font-size: 13px; }
     .pill { display: inline-block !important; width: fit-content; margin-top: 7px !important; padding: 4px 8px; border-radius: 999px; background: #dff6e8; color: #08783d !important; }
     .event-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-    .event-actions a { padding: 8px 10px; border: 1px solid #075e54; border-radius: 8px; color: #075e54; font-size: 12px; font-weight: 700; text-decoration: none; }
+    .event-actions button, .payment-actions button.link { padding: 8px 10px; border: 1px solid #075e54; border-radius: 8px; background: white; color: #075e54; font-size: 12px; font-weight: 700; cursor: pointer; }
     .payment { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 16px 0; border-bottom: 1px solid #e1e8e5; }
     .payment:last-child { border-bottom: 0; }
     .payment p { margin: 4px 0; color: #62706b; font-size: 13px; }
     .payment-actions { display: flex; gap: 8px; align-items: center; }
-    .payment-actions a, .payment-actions button { padding: 9px 11px; border-radius: 8px; font-size: 12px; text-decoration: none; }
-    .payment-actions a { color: #075e54; border: 1px solid #075e54; }
+    .payment-actions button { padding: 9px 11px; border-radius: 8px; font-size: 12px; }
     .payment-actions .reject { background: #a82c26; }
     .check-in-result { margin-top: 16px; padding: 16px; border: 1px solid #D5E2DD; border-radius: 12px; background: #F7FAF8; }
     .check-in-result p { margin: 5px 0; color: #53615c; }
@@ -111,6 +110,51 @@
     </section>
   </main>
   <script>
+    const tokenKey = 'adminToken';
+
+    function readToken() {
+      return sessionStorage.getItem(tokenKey) || '';
+    }
+
+    function ensureToken() {
+      if (readToken()) return;
+      const informed = (window.prompt('Token de administracao') || '').trim();
+      if (informed) sessionStorage.setItem(tokenKey, informed);
+    }
+
+    function authHeaders(extra = {}) {
+      return { ...extra, Authorization: `Bearer ${readToken()}` };
+    }
+
+    async function adminFetch(url, options = {}) {
+      if (!readToken()) throw new Error('Informe o token de administracao.');
+      const response = await fetch(url, { ...options, headers: authHeaders(options.headers) });
+      if (response.status === 401) {
+        sessionStorage.removeItem(tokenKey);
+        throw new Error('Token recusado. Recarregue a pagina e informe de novo.');
+      }
+      return response;
+    }
+
+    async function saveAuthorized(url, filename) {
+      const response = await adminFetch(url);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.erro || 'Nao foi possivel baixar o arquivo.');
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      if (filename) {
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        link.click();
+      } else {
+        window.open(objectUrl, '_blank', 'noopener');
+      }
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    }
+
     const eventForm = document.querySelector('#event-form');
     const lotForm = document.querySelector('#lot-form');
     const eventList = document.querySelector('#event-list');
@@ -141,8 +185,8 @@
           <span><code>${escapeHtml(event.codigo)}</code> · ${escapeHtml(event.data_evento)} · ${escapeHtml(event.local)}</span>
           <span class="pill">${escapeHtml(event.status)}</span>
           <div class="event-actions">
-            <a href="/admin/eventos/${encodeURIComponent(event.codigo)}/participantes-confirmados" target="_blank" rel="noopener">Ver confirmados</a>
-            <a href="/admin/eventos/${encodeURIComponent(event.codigo)}/exportar-participantes.csv">Exportar para Excel</a>
+            <button type="button" data-open="/admin/eventos/${encodeURIComponent(event.codigo)}/participantes-confirmados">Ver confirmados</button>
+            <button type="button" data-download="/admin/eventos/${encodeURIComponent(event.codigo)}/exportar-participantes.csv" data-filename="participantes.csv">Exportar para Excel</button>
           </div>
         </div>
       `).join('') || 'Nenhum evento cadastrado.';
@@ -151,14 +195,14 @@
     }
 
     async function refreshPayments() {
-      const response = await fetch('/admin/pedidos?status_pagamento=em_analise');
+      const response = await adminFetch('/admin/pedidos?status_pagamento=em_analise');
       const result = await response.json();
       if (!response.ok) throw new Error(result.erro);
       paymentList.innerHTML = result.pedidos.map((order) => `
         <div class="payment">
           <div><strong>${escapeHtml(order.protocolo)}</strong><p>${escapeHtml(order.evento_nome)} · ${order.quantidade} ingresso(s) · R$ ${escapeHtml(order.valor_total)}</p><p>Comprador: ${escapeHtml(order.comprador_nome)}</p></div>
           <div class="payment-actions">
-            <a href="/admin/comprovantes/${encodeURIComponent(order.comprovante_id)}" target="_blank" rel="noopener">Ver comprovante</a>
+            <button type="button" class="link" data-open="/admin/comprovantes/${encodeURIComponent(order.comprovante_id)}">Ver comprovante</button>
             <button data-order="${order.id}" data-decision="aprovar">Aprovar</button>
             <button class="reject" data-order="${order.id}" data-decision="recusar">Recusar</button>
           </div>
@@ -166,7 +210,23 @@
       `).join('') || 'Nenhum pagamento aguardando análise.';
     }
 
+    eventList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-open], button[data-download]');
+      if (!button) return;
+      try {
+        await saveAuthorized(button.dataset.open || button.dataset.download, button.dataset.filename || '');
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
     paymentList.addEventListener('click', async (event) => {
+      const openButton = event.target.closest('button[data-open]');
+      if (openButton) {
+        try { await saveAuthorized(openButton.dataset.open, ''); }
+        catch (error) { alert(error.message); }
+        return;
+      }
       const button = event.target.closest('button[data-order]');
       if (!button) return;
       const decisao = button.dataset.decision;
@@ -175,7 +235,7 @@
       if (!confirm(`Deseja ${decisao} este pagamento?`)) return;
       button.disabled = true;
       try {
-        const response = await fetch(`/admin/pedidos/${button.dataset.order}/pagamento`, {
+        const response = await adminFetch(`/admin/pedidos/${button.dataset.order}/pagamento`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ decisao, observacao, responsavel: 'Administrador local' }),
         });
@@ -193,7 +253,7 @@
       checkInResult.hidden = true;
       showMessage('#check-in-message', 'Consultando…', true);
       try {
-        const response = await fetch(`/admin/eventos/${encodeURIComponent(data.evento)}/check-in?busca=${encodeURIComponent(data.busca)}`);
+        const response = await adminFetch(`/admin/eventos/${encodeURIComponent(data.evento)}/check-in?busca=${encodeURIComponent(data.busca)}`);
         const result = await response.json();
         if (!response.ok) throw new Error(result.erro);
         const participant = result.participante;
@@ -221,7 +281,7 @@
       const eventCode = checkInEventSelect.value;
       button.disabled = true;
       try {
-        const response = await fetch(`/admin/eventos/${encodeURIComponent(eventCode)}/check-in`, {
+        const response = await adminFetch(`/admin/eventos/${encodeURIComponent(eventCode)}/check-in`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ participante_id: Number(button.dataset.checkIn) }),
@@ -246,7 +306,7 @@
       body.limite_por_comprador = Number(body.limite_por_comprador);
       body.prazo_reserva_minutos = Number(body.prazo_reserva_minutos);
       try {
-        const response = await fetch('/admin/eventos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const response = await adminFetch('/admin/eventos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const result = await response.json();
         if (!response.ok) throw new Error(result.erro);
         showMessage('#event-message', `Evento ${result.codigo} criado.`, true);
@@ -268,7 +328,7 @@
       body.quantidade_total = Number(body.quantidade_total);
       body.limite_por_comprador = Number(body.limite_por_comprador);
       try {
-        const response = await fetch(`/admin/eventos/${encodeURIComponent(eventCode)}/lotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const response = await adminFetch(`/admin/eventos/${encodeURIComponent(eventCode)}/lotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const result = await response.json();
         if (!response.ok) throw new Error(result.erro);
         showMessage('#lot-message', `Lote criado no evento ${result.evento}.`, true);
@@ -277,8 +337,9 @@
       finally { button.disabled = false; }
     });
 
+    ensureToken();
     refreshEvents().catch(() => { eventList.textContent = 'Não foi possível carregar os eventos.'; });
-    refreshPayments().catch(() => { paymentList.textContent = 'Não foi possível carregar os pagamentos.'; });
+    refreshPayments().catch((error) => { paymentList.textContent = error.message; });
   </script>
 </body>
 </html>

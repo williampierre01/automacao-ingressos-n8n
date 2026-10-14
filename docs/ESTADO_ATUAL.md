@@ -15,10 +15,10 @@ Revisão em 2026-10-12, só leitura de código e docs. **Não confirmei runtime*
 - **Lista de confirmados e CSV** (`GET .../participantes-confirmados`, `.../exportar-participantes.csv`, L801–837). Só `status_pagamento = 'aprovado'` e ingresso `valido`/`utilizado`.
 - **Check-in** por documento/protocolo, uma vez (`L840–912` e `web/admin.html` L103–238). Concorrência tratada com `WHERE status_ingresso = 'valido'`.
 - **Idempotência parcial de log**: `atendimentos.id_mensagem UNIQUE` (`schema.sql` L13); `POST /atendimentos` devolve 409 se repetir (`server.mjs` L1116–1118).
-- **Gateway WhatsApp**: GET de verificação com `hub.mode=subscribe` + `hub.verify_token` lido de `work/whatsapp/verify-token.txt` (`api/whatsapp-gateway.mjs` L8–16, L60–70). Bind em `127.0.0.1:8001`. Túnel Cloudflare *quick* em `scripts/iniciar-tunel-whatsapp.ps1`.
+- **Gateway WhatsApp**: GET de verificação com `hub.mode=subscribe` + `hub.verify_token` lido de `work/whatsapp/verify-token.txt`, comparado em tempo constante. POST exige `X-Hub-Signature-256` (HMAC-SHA256 do corpo bruto com `META_APP_SECRET`) e responde 401 sem assinatura válida, antes de encaminhar ao n8n. Corpo acima de 1 MB responde 413 antes do HMAC (`api/body.mjs`). Bind em `127.0.0.1:8001`. Túnel Cloudflare *quick* em `scripts/iniciar-tunel-whatsapp.ps1`.
 - **Scripts de boot**: Node 22.22.3 portátil + n8n `2.34.6` (`scripts/preparar-ambiente.ps1`, `scripts/iniciar-n8n.ps1` L46). `iniciar-projeto.ps1` sobe API e n8n.
-- **HTTPS local mkcert** (`scripts/configurar-https-local.ps1`, `iniciar-api-https.ps1`): certs em `work/https/` (coberto por `work/` no `.gitignore`).
-- **Simulador** `web/simulador.html` + admin `web/admin.html` servidos pela API (`server.mjs` L619–644).
+- **HTTPS local mkcert** (`scripts/configurar-https-local.ps1`, `iniciar-api-https.ps1`): certs em `work/https/` (coberto por `work/` no `.gitignore`). Continua em `0.0.0.0:8443`, com a mesma autenticação do HTTP.
+- **Simulador** `web/simulador.html` só é servido com `SIMULADOR_ATIVO=1` (`GET /` e `GET /simulador`). Sem a flag, 404. O admin `web/admin.html` continua em `GET /admin`.
 - **Workflows 01–03**: simulação manual / formulário n8n / POST `/atendimentos`. Workflow 04: webhook `whatsapp-mensagens` interpreta JSON simples **ou** envelope Cloud API de texto (`workflows/04-webhook-whatsapp-simulado.json` L21).
 
 ## O que é só simulação
@@ -52,26 +52,42 @@ Definidas em `.env.example` (valores de segredo **não** reproduzidos):
 
 - `N8N_ENCRYPTION_KEY`
 - `GENERIC_TIMEZONE` / `TZ` (padrão `America/Sao_Paulo`)
-
-Usadas no código da API, **não** documentadas no `.env.example`:
-
+- `ADMIN_TOKEN` — obrigatório, no mínimo 24 caracteres; abaixo disso a API não sobe
+- `META_APP_SECRET` — obrigatório para o gateway; sem ele o gateway não sobe
+- `SIMULADOR_ATIVO` — só `1` liga o simulador; o padrão é desligado
 - `API_DATABASE_PATH`, `API_HOST`, `API_PORT`
-- `API_HTTPS_HOST` (padrão `0.0.0.0`), `API_HTTPS_PORT` (8443)
+- `API_HTTPS_HOST` (no `.env.example`, `127.0.0.1`; o fallback do código e o `https.env` gerado continuam `0.0.0.0`), `API_HTTPS_PORT` (8443)
 - `API_TLS_CERT_PATH`, `API_TLS_KEY_PATH` (juntas ou nenhuma)
 - `N8N_WEBHOOK_URL` (padrão `http://127.0.0.1:5678/webhook/whatsapp-mensagens`)
 
-HTTPS: `work/https/https.env` gerado pelo script (fora do git). Gateway: token em arquivo, não em `.env`. **Não há variável de autenticação da API/admin.**
+HTTPS: `work/https/https.env` gerado pelo script (fora do git) e carregado depois do `.env`. O verify token do GET continua em `work/whatsapp/verify-token.txt`, não no `.env`.
+
+`scripts/iniciar-api.ps1`, `iniciar-api-https.ps1` e `iniciar-gateway-whatsapp.ps1` carregam o `.env` no processo e não imprimem os segredos.
+
+## Auth e HMAC (2026-10-14)
+
+As citações de linha da revisão de 2026-10-12 podem ter deslocado depois desta mudança.
+
+- `ADMIN_TOKEN` comparado com SHA-256 + `crypto.timingSafeEqual` (`api/auth.mjs`). Header: `Authorization: Bearer`. Token esperado ou recebido vazio não autoriza. Mínimo de 24 caracteres.
+- Exigem o token: `/admin/*`, `GET /atendimentos`, `GET /exportar`.
+- Sem o token: `GET /admin` (só o HTML), `GET /saude` (não devolve o caminho do banco), catálogo `/eventos`, `POST /comprovantes`, `POST /atendimentos`.
+- Simulador desligado por padrão. `SIMULADOR_ATIVO=1` liga `GET /`, `GET /simulador` e `POST /simular-mensagem`. Sem a flag, essas rotas respondem 404.
+- `web/admin.html` pede o token ao abrir e guarda só em `sessionStorage`. CSV, confirmados e comprovante baixam por `fetch`, porque um link não envia o header.
+- Gateway: HMAC do corpo bruto em `api/meta-signature.mjs`. Assinatura ausente, errada ou de outro corpo → 401, sem encaminhar ao n8n. Acima de 1 MB → 413, antes do HMAC.
+- Testes: `node --test api/auth.test.mjs api/meta-signature.test.mjs api/simulator.test.mjs api/body.test.mjs`.
+
+**Risco do HTTPS em rede compartilhada.** O `.env.example` usa `API_HTTPS_HOST=127.0.0.1`. O código, se a variável vier vazia, e o `scripts/configurar-https-local.ps1` ainda gravam `0.0.0.0`. `scripts/iniciar-api-https.ps1` avisa quando o valor efetivo é `0.0.0.0`: quem estiver na mesma rede alcança a porta, e `POST /atendimentos` e `POST /comprovantes` ficam abertos. Admin e listagens continuam exigindo `ADMIN_TOKEN`.
 
 ## Como rodar do zero (pelo que os scripts fazem)
 
 1. Node.js com `npm` no PATH (o portátil é instalado *via* npm).
 2. `powershell -ExecutionPolicy Bypass -File .\scripts\preparar-ambiente.ps1` → Node `22.22.3` em `work/runtime/`.
-3. Copiar `.env.example` → `.env` e preencher `N8N_ENCRYPTION_KEY` (não commitar).
+3. Copiar `.env.example` → `.env` e preencher `N8N_ENCRYPTION_KEY`, `ADMIN_TOKEN` e `META_APP_SECRET` (não commitar).
 4. `.\scripts\iniciar-projeto.ps1` (ou `iniciar-n8n.ps1` + `iniciar-api.ps1`).
 5. Abrir n8n `http://localhost:5678`, importar/ativar `workflows/04-webhook-whatsapp-simulado.json` (**não confirmado** se já está ativo na pasta `work/n8n-user`).
-6. Simulador: `http://127.0.0.1:8000/simulador`. Admin: `http://127.0.0.1:8000/admin`.
-7. Exportar log antigo: `.\scripts\exportar-planilha.ps1` → `planilha/dados/atendimentos.csv`. Lista de entrada: botão no admin ou `GET /admin/eventos/:codigo/exportar-participantes.csv`.
-8. Gateway (opcional): token em `work/whatsapp/verify-token.txt` + `iniciar-gateway-whatsapp.ps1` + `iniciar-tunel-whatsapp.ps1` (exige `work/tools/cloudflared.exe`).
+6. Simulador, só com `SIMULADOR_ATIVO=1`: `http://127.0.0.1:8000/simulador`. Admin: `http://127.0.0.1:8000/admin` (a página pede o `ADMIN_TOKEN`).
+7. Exportar log antigo: `.\scripts\exportar-planilha.ps1` → `planilha/dados/atendimentos.csv` (envia o Bearer). Lista de entrada: botão no admin ou `GET /admin/eventos/:codigo/exportar-participantes.csv` com o mesmo token.
+8. Gateway (opcional): `META_APP_SECRET` no `.env`, token em `work/whatsapp/verify-token.txt`, `iniciar-gateway-whatsapp.ps1` + `iniciar-tunel-whatsapp.ps1` (exige `work/tools/cloudflared.exe`).
 
 O computador precisa ficar ligado. Integração Meta **não** está concluída no código.
 
