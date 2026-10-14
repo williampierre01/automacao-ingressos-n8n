@@ -19,6 +19,10 @@ backups/
 # Dados reais coletados
 planilha/dados/
 data/
+contexto_n8n.txt
+conversas/
+chats/
+exports/whatsapp/
 
 # Arquivos temporarios e registros
 work/
