@@ -8,14 +8,32 @@ if (-not (Test-Path -LiteralPath $envFile)) {
     throw 'Arquivo .env nao encontrado. Crie-o antes de iniciar o n8n.'
 }
 
+function Permitida-NoN8n([string]$nome) {
+    # So o que o fluxo 04 e o arranque do n8n usam. O script define as N8N_* de host logo abaixo.
+    return $nome -eq 'N8N_ENCRYPTION_KEY' -or $nome -eq 'GENERIC_TIMEZONE' -or $nome -eq 'TZ' -or $nome -eq 'API_INTERNAL_TOKEN'
+}
+
+$chavesDoArquivo = New-Object System.Collections.Generic.List[string]
 Get-Content -LiteralPath $envFile |
     Where-Object { $_ -and -not $_.StartsWith('#') } |
     ForEach-Object {
         $parts = $_.Split('=', 2)
-        if ($parts.Count -eq 2) {
+        if ($parts.Count -ne 2 -or -not $parts[0]) { return }
+        $chavesDoArquivo.Add($parts[0])
+        if (Permitida-NoN8n $parts[0]) {
             [Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process')
         }
     }
+
+foreach ($nome in $chavesDoArquivo) {
+    if (-not (Permitida-NoN8n $nome)) {
+        [Environment]::SetEnvironmentVariable($nome, $null, 'Process')
+    }
+}
+
+foreach ($nome in @('ADMIN_TOKEN', 'META_APP_SECRET')) {
+    [Environment]::SetEnvironmentVariable($nome, $null, 'Process')
+}
 
 $env:N8N_USER_FOLDER = Join-Path $projectRoot 'work\n8n-user'
 $env:N8N_HOST = 'localhost'
@@ -44,5 +62,8 @@ if (-not (Test-Path -LiteralPath $npxCli)) {
 New-Item -ItemType Directory -Force -Path $env:N8N_USER_FOLDER | Out-Null
 New-Item -ItemType Directory -Force -Path $env:npm_config_cache | Out-Null
 
-Set-Location -LiteralPath $projectRoot
+# O n8n carrega o .env da pasta atual e reporia ADMIN_TOKEN e META_APP_SECRET.
+$n8nCwd = Join-Path $projectRoot 'work\n8n-cwd'
+New-Item -ItemType Directory -Force -Path $n8nCwd | Out-Null
+Set-Location -LiteralPath $n8nCwd
 & $portableNode $npxCli --yes n8n@2.34.6 start
