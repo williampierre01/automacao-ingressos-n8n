@@ -428,10 +428,7 @@ export function registrarComprovante(database, {
     const evento = database.prepare('SELECT * FROM eventos WHERE codigo = ?').get(eventoCodigo);
     const pedido = database.prepare('SELECT * FROM pedidos WHERE id = ?').get(pedidoId);
     const telefoneDigitos = digitosTelefone(telefone);
-    const conversa = evento
-      ? database.prepare('SELECT * FROM conversas WHERE evento_id = ? AND telefone = ?').get(evento.id, telefoneDigitos)
-      : null;
-    if (!evento || !pedido || !conversa || Number(conversa.pedido_id) !== Number(pedidoId)
+    if (!evento || !pedido || Number(pedido.evento_id) !== Number(evento.id)
       || digitosTelefone(pedido.comprador_telefone) !== telefoneDigitos) {
       throw new RegraError('PROIBIDO', 'O comprovante nao pertence a esta conversa.');
     }
@@ -532,6 +529,11 @@ const COLUNAS_PARTICIPANTE = [
 ];
 
 function recriarParticipantes(database, { falharCopia = false } = {}) {
+  const reais = database.prepare('PRAGMA table_info(participantes)').all().map((coluna) => coluna.name);
+  const extras = reais.filter((nome) => !COLUNAS_PARTICIPANTE.includes(nome));
+  if (extras.length > 0) {
+    throw new Error(`Migracao abortada: a tabela participantes tem coluna extra: ${extras.join(', ')}.`);
+  }
   const lista = COLUNAS_PARTICIPANTE.join(', ');
   const antes = Number(database.prepare('SELECT COUNT(*) AS n FROM participantes').get().n);
   database.exec(`
@@ -626,14 +628,11 @@ export function migrar(database, { databasePath, agora = new Date(), falharCopia
   const versao = Number(database.prepare('PRAGMA user_version').get().user_version);
   if (versao >= 1) return { migrado: false, backup: null };
 
-  const recriar = participantesExigeDocumento(database);
-  let backup = null;
-  if (recriar) {
-    if (!databasePath) {
-      throw new Error('Migracao abortada: caminho do banco ausente para o backup.');
-    }
-    backup = backupBanco(database, databasePath, agora);
+  if (!databasePath) {
+    throw new Error('Migracao abortada: caminho do banco ausente para o backup.');
   }
+  const backup = backupBanco(database, databasePath, agora);
+  const recriar = participantesExigeDocumento(database);
 
   if (recriar) database.exec('PRAGMA foreign_keys = OFF');
   try {

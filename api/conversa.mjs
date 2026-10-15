@@ -320,5 +320,9 @@ export function processarMensagem(database, { evento, payload, agora = new Date(
     });
   }
 
+  if (conversa.estado === 'pagamento_em_analise') {
+    return responder(conversa, 'Seu comprovante esta em analise. Aguarde a confirmacao.');
+  }
+
   return responder(conversa, 'Este atendimento precisa ser continuado por uma pessoa.');
 }

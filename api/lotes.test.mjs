@@ -412,6 +412,72 @@ test('migracao aborta quando a copia de participantes diverge', async () => {
   }
 });
 
+test('migracao da versao 0 grava backup mesmo sem recriar participantes', async () => {
+  const diretorio = await temporario();
+  try {
+    const caminho = join(diretorio, 'novo.sqlite');
+    const database = new DatabaseSync(caminho);
+    database.exec(schema);
+    const resultado = migrar(database, { databasePath: caminho });
+    assert.equal(resultado.migrado, true);
+    assert.ok(resultado.backup);
+    const backups = (await readdir(diretorio)).filter((nome) => nome.startsWith('backup-pre-migracao-'));
+    assert.equal(backups.length, 1);
+    const backup = new DatabaseSync(join(diretorio, backups[0]));
+    assert.equal(Number(backup.prepare('PRAGMA user_version').get().user_version), 0);
+    const sql = backup.prepare(`SELECT sql FROM sqlite_master WHERE name = 'participantes'`).get().sql;
+    assert.doesNotMatch(sql, /tipo_documento TEXT NOT NULL/i);
+    backup.close();
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 1);
+    assert.equal(migrar(database, { databasePath: caminho }).backup, null);
+    database.close();
+  } finally {
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('migracao aborta quando participantes tem coluna extra e mantem o backup', async () => {
+  const diretorio = await temporario();
+  try {
+    const caminho = join(diretorio, 'legado.sqlite');
+    const database = new DatabaseSync(caminho);
+    database.exec(schemaLegado);
+    database.exec('ALTER TABLE participantes ADD COLUMN apelido TEXT');
+    const agora = agoraIso();
+    const eventoId = Number(database.prepare(`
+      INSERT INTO eventos (codigo, nome, data_evento, local, capacidade_total, status, criado_em, atualizado_em)
+      VALUES ('festa', 'Festa', '2026-12-31', 'Local', 10, 'vendas_abertas', ?, ?)
+    `).run(agora, agora).lastInsertRowid);
+    const pedidoId = Number(database.prepare(`
+      INSERT INTO pedidos (
+        protocolo, evento_id, data_contato, comprador_nome, comprador_telefone, quantidade,
+        valor_unitario_centavos, valor_total_centavos, status, status_pagamento, criado_em, atualizado_em
+      ) VALUES ('ING-1', ?, ?, 'Ana', '11999999999', 1, 1000, 1000, 'concluido', 'aprovado', ?, ?)
+    `).run(eventoId, agora, agora, agora).lastInsertRowid);
+    database.prepare(`
+      INSERT INTO participantes (
+        pedido_id, evento_id, nome_completo, tipo_documento, numero_documento, apelido, criado_em, atualizado_em
+      ) VALUES (?, ?, 'Ana', 'CPF', '11111111111', 'Aninha', ?, ?)
+    `).run(pedidoId, eventoId, agora, agora);
+    assert.throws(
+      () => migrar(database, { databasePath: caminho }),
+      /Migracao abortada: a tabela participantes tem coluna extra: apelido/,
+    );
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 0);
+    assert.equal(contar(database, 'participantes'), 1);
+    assert.equal(database.prepare(`SELECT apelido FROM participantes`).get().apelido, 'Aninha');
+    assert.equal(database.prepare(`SELECT name FROM sqlite_master WHERE name = 'participantes_nova'`).get(), undefined);
+    const backups = (await readdir(diretorio)).filter((nome) => nome.startsWith('backup-pre-migracao-'));
+    assert.equal(backups.length, 1);
+    const backup = new DatabaseSync(join(diretorio, backups[0]));
+    assert.equal(backup.prepare('SELECT apelido FROM participantes').get().apelido, 'Aninha');
+    backup.close();
+    database.close();
+  } finally {
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
 test('reserva pendente nao vira lote e pedido grande estoura so o lote vigente', async () => {
   const diretorio = await temporario();
   try {
@@ -732,6 +798,91 @@ test('comprovante no prazo impede a expiracao e comprovante tardio segue para an
   }
 });
 
+test('comprovante do pedido expirado entra em analise depois de um novo COMPRAR', async () => {
+  const diretorio = await temporario();
+  try {
+    const { database } = abrirNovo(diretorio);
+    const criado = criarEvento(database);
+    const telefone = '11933334444';
+    falar(database, criado.evento, telefone, 'COMPRAR');
+    falar(database, criado.evento, telefone, '1');
+    const reserva = falar(database, criado.evento, telefone, 'Ana Expirada');
+    database.prepare(`UPDATE pedidos SET reserva_expira_em = ? WHERE id = ?`)
+      .run(new Date(Date.now() - 1000).toISOString(), reserva.pedido_id);
+    expirarReservas(database);
+    const nova = falar(database, criado.evento, telefone, 'COMPRAR');
+    assert.equal(nova.estado, 'aguardando_quantidade');
+    const conversa = database.prepare('SELECT estado, pedido_id FROM conversas WHERE telefone = ?').get(telefone);
+    assert.equal(conversa.estado, 'aguardando_quantidade');
+    assert.equal(conversa.pedido_id, null);
+
+    assert.throws(
+      () => registrarComprovante(database, {
+        pedidoId: reserva.pedido_id,
+        telefone: '11900000000',
+        eventoCodigo: criado.evento.codigo,
+        comprovanteId: randomUUID(),
+        nomeOriginal: 'outro.png',
+        tipoMime: 'image/png',
+        caminho: 'C:/tmp/outro.png',
+        tamanhoBytes: 8,
+      }),
+      (erro) => erro.codigo === 'PROIBIDO',
+    );
+    assert.equal(pedido(database, reserva.pedido_id).status, 'expirado');
+
+    const recebido = registrarComprovante(database, {
+      pedidoId: reserva.pedido_id,
+      telefone: '(11) 93333-4444',
+      eventoCodigo: criado.evento.codigo,
+      comprovanteId: randomUUID(),
+      nomeOriginal: 'tarde.png',
+      tipoMime: 'image/png',
+      caminho: 'C:/tmp/tarde.png',
+      tamanhoBytes: 8,
+    });
+    const gravado = pedido(database, reserva.pedido_id);
+    assert.equal(recebido.tardio, true);
+    assert.equal(gravado.status, 'pagamento_em_analise');
+    assert.equal(gravado.status_pagamento, 'em_analise');
+    assert.equal(gravado.recebido_apos_expirar, 1);
+    assert.match(gravado.observacoes, new RegExp(MARCA_COMPROVANTE_TARDIO));
+    const depois = database.prepare('SELECT estado, pedido_id FROM conversas WHERE telefone = ?').get(telefone);
+    assert.equal(depois.estado, 'aguardando_quantidade');
+    assert.equal(depois.pedido_id, null);
+    database.close();
+  } finally {
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('conversa em analise pede para aguardar a confirmacao', async () => {
+  const diretorio = await temporario();
+  try {
+    const { database } = abrirNovo(diretorio);
+    const criado = criarEvento(database);
+    falar(database, criado.evento, '11922223333', 'COMPRAR');
+    falar(database, criado.evento, '11922223333', '1');
+    const reserva = falar(database, criado.evento, '11922223333', 'Bia Analise');
+    registrarComprovante(database, {
+      pedidoId: reserva.pedido_id,
+      telefone: '11922223333',
+      eventoCodigo: criado.evento.codigo,
+      comprovanteId: randomUUID(),
+      nomeOriginal: 'pix.png',
+      tipoMime: 'image/png',
+      caminho: 'C:/tmp/pix.png',
+      tamanhoBytes: 8,
+    });
+    const resposta = falar(database, criado.evento, '11922223333', 'e ai');
+    assert.equal(resposta.estado, 'pagamento_em_analise');
+    assert.equal(resposta.resposta, 'Seu comprovante esta em analise. Aguarde a confirmacao.');
+    database.close();
+  } finally {
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
 test('corrida entre expirar e comprovante termina em analise com o preco congelado', async () => {
   const diretorio = await temporario();
   try {
@@ -970,6 +1121,45 @@ test('rota de aprovacao nao falha com webhook indisponivel e o alerta sai ao anu
     assert.equal((await depois.json()).viradas.length, 0);
     const seguinte = await fetch(`http://127.0.0.1:${api.port}/eventos/evento-demonstracao/lote-atual`);
     assert.equal((await seguinte.json()).lote.nome, 'Segundo lote');
+  } finally {
+    await stopApi(api);
+  }
+});
+
+test('comprovante de outro telefone responde 403', async () => {
+  const api = await startApi({});
+  try {
+    const loteAtual = await fetch(`http://127.0.0.1:${api.port}/eventos/evento-demonstracao/lote-atual`);
+    const corpo = await loteAtual.json();
+    const database = new DatabaseSync(api.databasePath);
+    database.exec('PRAGMA busy_timeout = 5000');
+    const pedidoId = inserirPedido(database, {
+      eventoId: corpo.lote.evento_id,
+      loteId: corpo.lote.id,
+      telefone: '11944445555',
+      quantidade: 1,
+      valor: 3000,
+      status: 'expirado',
+      pagamento: 'pendente',
+      expira: new Date(Date.now() - 1000).toISOString(),
+    });
+    database.close();
+    const resposta = await fetch(`http://127.0.0.1:${api.port}/comprovantes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pedido_id: pedidoId,
+        telefone: '11900000099',
+        evento_codigo: 'evento-demonstracao',
+        nome_arquivo: 'falso.png',
+        tipo_mime: 'image/png',
+        arquivo_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      }),
+    });
+    assert.equal(resposta.status, 403);
+    const conferido = new DatabaseSync(api.databasePath);
+    assert.equal(conferido.prepare('SELECT status FROM pedidos WHERE id = ?').get(pedidoId).status, 'expirado');
+    conferido.close();
   } finally {
     await stopApi(api);
   }
