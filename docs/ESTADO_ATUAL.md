@@ -13,13 +13,15 @@ O WhatsApp e o simulador chegam na venda pelo mesmo caminho.
 
 `POST /simular-mensagem` monta esse JSON e espera o n8n. Continua exigindo `SIMULADOR_ATIVO=1`. `POST /atendimentos` permanece para os fluxos 02 e 03.
 
-O n8n 2.34.6 só expõe `$env` no nó quando `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`. `scripts/iniciar-n8n.ps1` define isso no processo local. Publicar o fluxo, reiniciando o n8n se ele já estiver aberto:
+O n8n 2.34.6 só expõe `$env` no nó quando `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`. `scripts/iniciar-n8n.ps1` define isso no processo local e carrega do `.env` só `N8N_ENCRYPTION_KEY`, `GENERIC_TIMEZONE`, `TZ` e `API_INTERNAL_TOKEN`. As `N8N_*` de arranque (`N8N_USER_FOLDER`, `N8N_HOST`, `N8N_PORT`, `N8N_PROTOCOL`, `N8N_SECURE_COOKIE`) ficam no próprio script. `ADMIN_TOKEN`, `META_APP_SECRET` e o restante do `.env` são removidos do processo. A pasta atual é `work/n8n-cwd`: o n8n lê um `.env` na pasta de onde sobe e, no diretório do projeto, reporia esses segredos. Publicar o fluxo, reiniciando o n8n se ele já estiver aberto:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publicar-fluxo-04.ps1
 ```
 
 Isso executa `import:workflow --input=workflows/04-webhook-whatsapp-simulado.json` e `publish:workflow --id=webhookWhatsapp0001`.
+
+`GATEWAY_PORT` muda a porta do gateway. Vazio continua `8001`. `scripts/testar-entrada.ps1` sobe API e gateway em portas temporárias, com o n8n real em `127.0.0.1:5678`, e não imprime segredo. Além do simulador, o script confere no processo que escuta a 5678 que `API_INTERNAL_TOKEN` está definido e que `ADMIN_TOKEN` e `META_APP_SECRET` não estão. Pelo gateway, com HMAC válido e envelope da Cloud API: texto assinado grava `pendente_envio`; o mesmo `wamid` responde 200 sem outra saída; assinatura inválida responde 401 e não cria linha; destino em porta fechada acumula a fila e, apontando de novo para o n8n, entrega; a segunda mensagem do mesmo telefone não passa à frente de uma falha pendente, e a de outro telefone passa; o reinício retoma `pendente` e `processando`; `POST /admin/whatsapp/fila/:id/reenfileirar` devolve um item `falhou` para a fila.
 
 ## O que funciona (evidência no código)
 
@@ -77,7 +79,8 @@ Definidas em `.env.example` (valores de segredo **não** reproduzidos):
 - `API_INTERNAL_TOKEN` — obrigatório, no mínimo 24 caracteres; abaixo disso a API não sobe. O fluxo 04 envia este Bearer.
 - `WHATSAPP_EVENTO_CODIGO` — vazio usa o único evento com vendas abertas
 - `FILA_MAX_TENTATIVAS` (padrão 30) e `FILA_RETENCAO_DIAS` (padrão 7)
-- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` fica no processo do `iniciar-n8n.ps1`, não no `.env`
+- `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` fica no processo do `iniciar-n8n.ps1`, não no `.env`. Esse processo não recebe `ADMIN_TOKEN`, `META_APP_SECRET` nem as variáveis da API
+- `GATEWAY_PORT` — vazio usa `8001`
 - `N8N_VIRADA_LOTE_WEBHOOK_URL` — opcional; aviso de virada ou esgotamento. Vazio ou n8n fora do ar não desfaz a aprovação
 
 HTTPS: `work/https/https.env` gerado pelo script (fora do git) e carregado depois do `.env`. O verify token do GET continua em `work/whatsapp/verify-token.txt`, não no `.env`.
