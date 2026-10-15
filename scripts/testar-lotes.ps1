@@ -237,6 +237,27 @@ function Parar-Api {
   }
 }
 
+function Apagar-PastaTemporaria {
+  $esperado = [System.IO.Path]::GetFullPath((Join-Path $raiz 'work\tmp-teste-lotes'))
+  $resolvido = [System.IO.Path]::GetFullPath($tmp)
+  $prefixo = $esperado.TrimEnd('\')
+  $igual = [System.StringComparison]::OrdinalIgnoreCase
+  $permitido = $resolvido.Equals($prefixo, $igual) -or $resolvido.StartsWith($prefixo + '\', $igual)
+  if (-not $permitido) {
+    throw "A pasta temporaria resolvida nao comeca com $prefixo. Nada foi apagado."
+  }
+  if (-not (Test-Path -LiteralPath $resolvido)) { return }
+  for ($i = 0; $i -lt 8; $i++) {
+    try {
+      Remove-Item -LiteralPath $resolvido -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($i -eq 7) { throw }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+}
+
 function Limpar-Arquivos {
   foreach ($id in $recibos) {
     $arquivo = Join-Path $raiz ("data\comprovantes\{0}.png" -f $id)
@@ -244,16 +265,7 @@ function Limpar-Arquivos {
       Remove-Item -LiteralPath $arquivo -Force -ErrorAction SilentlyContinue
     }
   }
-  if (Test-Path -LiteralPath $tmp) {
-    for ($i = 0; $i -lt 8; $i++) {
-      try {
-        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction Stop
-        break
-      } catch {
-        Start-Sleep -Milliseconds 250
-      }
-    }
-  }
+  Apagar-PastaTemporaria
 }
 
 function Limpar-Atendimentos-Reais {
@@ -287,7 +299,7 @@ try {
   $portatil = Join-Path $raiz 'work\runtime\node_modules\node\bin\node.exe'
   if (Test-Path -LiteralPath $portatil) { $node = $portatil } else { $node = 'node' }
 
-  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+  Apagar-PastaTemporaria
   New-Item -ItemType Directory -Path $tmp | Out-Null
 
   $psi = New-Object System.Diagnostics.ProcessStartInfo
