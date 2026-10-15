@@ -289,6 +289,10 @@ try {
     Write-Output 'FALHOU 1. Cotacao de 2 ingressos = R$ 60 e nao cria pedido (ADMIN_TOKEN ausente ou curto no .env)'
     exit 1
   }
+  if ((Ler-Env $envFile 'API_INTERNAL_TOKEN').Length -lt 24) {
+    Write-Output 'FALHOU 1. Cotacao de 2 ingressos = R$ 60 e nao cria pedido (API_INTERNAL_TOKEN ausente ou curto no .env)'
+    exit 1
+  }
   $caminhoConfigurado = Ler-Env $envFile 'API_DATABASE_PATH'
   if ($caminhoConfigurado) {
     $bancoReal = $caminhoConfigurado
@@ -311,6 +315,7 @@ try {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.EnvironmentVariables['ADMIN_TOKEN'] = $adminToken
+  $psi.EnvironmentVariables['API_INTERNAL_TOKEN'] = (Ler-Env $envFile 'API_INTERNAL_TOKEN')
   $psi.EnvironmentVariables['API_HOST'] = '127.0.0.1'
   $psi.EnvironmentVariables['API_PORT'] = [string]$porta
   $psi.EnvironmentVariables['API_DATABASE_PATH'] = $banco

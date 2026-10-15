@@ -193,6 +193,7 @@ function Test-SimulatorOff {
         API_PORT = [Environment]::GetEnvironmentVariable('API_PORT', 'Process')
         API_HOST = [Environment]::GetEnvironmentVariable('API_HOST', 'Process')
         API_DATABASE_PATH = [Environment]::GetEnvironmentVariable('API_DATABASE_PATH', 'Process')
+        API_INTERNAL_TOKEN = [Environment]::GetEnvironmentVariable('API_INTERNAL_TOKEN', 'Process')
         API_TLS_CERT_PATH = [Environment]::GetEnvironmentVariable('API_TLS_CERT_PATH', 'Process')
         API_TLS_KEY_PATH = [Environment]::GetEnvironmentVariable('API_TLS_KEY_PATH', 'Process')
         ADMIN_TOKEN = [Environment]::GetEnvironmentVariable('ADMIN_TOKEN', 'Process')
@@ -203,6 +204,7 @@ function Test-SimulatorOff {
             Remove-Item "Env:$key" -ErrorAction SilentlyContinue
         }
         $env:ADMIN_TOKEN = $adminToken
+        $env:API_INTERNAL_TOKEN = Read-EnvValue 'API_INTERNAL_TOKEN'
         $env:API_HOST = '127.0.0.1'
         $env:API_PORT = "$port"
         $env:API_DATABASE_PATH = $tempDatabase

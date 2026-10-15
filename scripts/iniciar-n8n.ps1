@@ -22,6 +22,8 @@ $env:N8N_HOST = 'localhost'
 $env:N8N_PORT = '5678'
 $env:N8N_PROTOCOL = 'http'
 $env:N8N_SECURE_COOKIE = 'false'
+# n8n 2.34.6 bloqueia $env no no enquanto esta variavel nao for a string false.
+$env:N8N_BLOCK_ENV_ACCESS_IN_NODE = 'false'
 $env:npm_config_cache = Join-Path $projectRoot 'work\npm-cache'
 
 $portableNodeFolder = Join-Path $projectRoot 'work\runtime\node_modules\node\bin'

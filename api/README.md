@@ -4,13 +4,18 @@ A API recebe os dados enviados pelo n8n e grava tudo no banco local SQLite em `d
 
 ## Autenticacao
 
-A API so inicia com `ADMIN_TOKEN` de pelo menos 24 caracteres. Rotas `/admin/*`, `GET /atendimentos` e `GET /exportar` exigem `Authorization: Bearer`. A pagina `GET /admin` pede esse token e o guarda apenas em `sessionStorage`.
+A API so inicia com `ADMIN_TOKEN` e `API_INTERNAL_TOKEN`, cada um com pelo menos 24 caracteres. Rotas `/admin/*`, `GET /atendimentos` e `GET /exportar` exigem `Authorization: Bearer` do admin. `POST /interno/mensagem` exige o token interno, tambem em `Authorization: Bearer`.
 
-`GET /saude`, o catalogo de eventos, `POST /comprovantes` e `POST /atendimentos` nao usam esse token. `GET /`, `GET /simulador` e `POST /simular-mensagem` so existem com `SIMULADOR_ATIVO=1`; sem a flag respondem 404.
+`GET /saude`, o catalogo de eventos, `POST /comprovantes` e `POST /atendimentos` nao usam o token do admin. `GET /`, `GET /simulador` e `POST /simular-mensagem` so existem com `SIMULADOR_ATIVO=1`; sem a flag respondem 404.
+
+`POST /simular-mensagem` monta a mensagem normalizada e chama o webhook do fluxo 04. A venda roda em `POST /interno/mensagem`. O gateway grava o evento na fila e responde 200; o worker entrega ao mesmo webhook. Imagem e documento recebem um texto provisorio. A resposta fica em `mensagens_saida` com status `pendente_envio`.
 
 ## Enderecos
 
 - `GET /saude`: verifica se a API esta funcionando.
+- `POST /interno/mensagem`: recebe a mensagem ja normalizada, executa a venda e grava a saida como `pendente_envio`. Exige o token interno.
+- `GET /admin/whatsapp/fila`: lista entregas que falharam.
+- `POST /admin/whatsapp/fila/:id/reenfileirar`: devolve o item a fila, se o corpo ainda existir.
 - `POST /atendimentos`: grava um atendimento.
 - `GET /atendimentos`: lista os registros mais recentes.
 - `GET /exportar`: baixa todos os registros em CSV compativel com Excel.
