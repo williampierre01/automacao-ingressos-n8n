@@ -27,8 +27,8 @@ export function requireSecret(name, env = process.env) {
   if (!value) {
     throw new Error(`${name} nao definido.`);
   }
-  if (name === 'ADMIN_TOKEN' && value.length < 24) {
-    throw new Error('ADMIN_TOKEN precisa ter pelo menos 24 caracteres.');
+  if ((name === 'ADMIN_TOKEN' || name === 'API_INTERNAL_TOKEN') && value.length < 24) {
+    throw new Error(`${name} precisa ter pelo menos 24 caracteres.`);
   }
   return value;
 }

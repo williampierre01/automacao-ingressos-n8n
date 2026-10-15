@@ -112,6 +112,12 @@
     </section>
 
     <section class="card">
+      <h2>Fila do WhatsApp</h2>
+      <p>Eventos que esgotaram as tentativas. O corpo bruto some depois do prazo de retenção.</p>
+      <div id="queue-list">Carregando…</div>
+    </section>
+
+    <section class="card">
       <h2>Check-in na entrada</h2>
       <form id="check-in-form">
         <label>Evento<select name="evento" id="check-in-event-select" required></select></label>
@@ -207,6 +213,39 @@
       eventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
       checkInEventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
     }
+
+    async function refreshQueue() {
+      const response = await adminFetch('/admin/whatsapp/fila');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.erro);
+      const itens = result.itens || [];
+      queueList.innerHTML = itens.map((item) => `
+        <article class="event">
+          <strong>${escapeHtml(item.tipo)} · ${escapeHtml(item.telefone)}</strong>
+          <span>${escapeHtml(new Date(item.atualizado_em).toLocaleString('pt-BR'))} · ${item.tentativas} tentativas</span>
+          <span>${escapeHtml(item.ultimo_erro || 'sem detalhe')}${Number(item.tem_corpo) === 1 ? '' : ' · corpo expirado'}</span>
+          <div class="event-actions">
+            <button type="button" data-reenfileirar="${item.id}" ${Number(item.tem_corpo) === 1 ? '' : 'disabled'}>Reenfileirar</button>
+          </div>
+        </article>
+      `).join('') || 'Nenhuma entrega esgotada.';
+    }
+
+    const queueList = document.querySelector('#queue-list');
+    queueList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-reenfileirar]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const response = await adminFetch(`/admin/whatsapp/fila/${button.dataset.reenfileirar}/reenfileirar`, { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.erro);
+        await refreshQueue();
+      } catch (error) {
+        alert(error.message);
+        button.disabled = false;
+      }
+    });
 
     async function refreshViradas() {
       const response = await adminFetch('/admin/viradas');
@@ -388,6 +427,7 @@
     refreshEvents().catch(() => { eventList.textContent = 'Não foi possível carregar os eventos.'; });
     refreshPayments().catch((error) => { paymentList.textContent = error.message; });
     refreshViradas().catch((error) => { lotAlert.hidden = false; lotAlertList.textContent = error.message; });
+    refreshQueue().catch((error) => { queueList.textContent = error.message; });
   </script>
 </body>
 </html>

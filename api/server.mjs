@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
-import { processarMensagem } from './conversa.mjs';
+import { processarEntrada } from './entrada.mjs';
+import { listarFalhas, reenfileirar, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -46,6 +47,7 @@ if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
 }
 
 const adminToken = requireSecret('ADMIN_TOKEN');
+const internalToken = requireSecret('API_INTERNAL_TOKEN');
 
 mkdirSync(dataFolder, { recursive: true });
 mkdirSync(receiptsFolder, { recursive: true });
@@ -834,6 +836,35 @@ const requestListener = async (request, response) => {
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/interno/mensagem') {
+    if (!adminAuthorized(request.headers.authorization, internalToken)) {
+      sendJson(response, 401, { erro: 'Nao autorizado.' });
+      return;
+    }
+    try {
+      const body = await readJson(request);
+      const resultado = processarEntrada(database, {
+        telefone: normalizeText(body.telefone, 30),
+        nome: normalizeText(body.nome, 150),
+        tipo: normalizeText(body.tipo, 30),
+        texto: normalizeText(body.texto, 5000),
+        id_mensagem: normalizeText(body.id_mensagem, 200),
+        timestamp: normalizeText(body.timestamp, 40),
+        origem: normalizeText(body.origem, 100) || 'whatsapp',
+        evento_codigo: normalizeText(body.evento_codigo, 100).toLowerCase(),
+      });
+      if (resultado.statusCode) {
+        sendJson(response, resultado.statusCode, { erro: resultado.erro });
+        return;
+      }
+      sendJson(response, 200, resultado);
+    } catch (error) {
+      sendJson(response, 500, { erro: 'Nao foi possivel processar a mensagem.' });
+      console.error(`Falha em /interno/mensagem: ${error.message}`);
+    }
+    return;
+  }
+
   if (request.method === 'POST' && url.pathname === '/simular-mensagem') {
     if (!simulatorEnabled) {
       sendJson(response, 404, { erro: 'Rota nao encontrada.' });
@@ -846,7 +877,7 @@ const requestListener = async (request, response) => {
         nome: normalizeText(body.nome, 150),
         mensagem: normalizeText(body.mensagem, 5000),
         evento_codigo: normalizeText(body.evento_codigo, 100).toLowerCase(),
-        origem: normalizeText(body.origem, 100) || 'simulador_local',
+        origem: normalizeText(body.origem, 100) || 'simulador',
         id_mensagem: normalizeText(body.id_mensagem, 200) || randomUUID(),
       };
 
@@ -856,59 +887,40 @@ const requestListener = async (request, response) => {
         return;
       }
 
-      const selectedEvent = eventByCodeStatement.get(payload.evento_codigo);
-      if (!selectedEvent) {
-        sendJson(response, 404, { erro: 'O evento selecionado nao foi encontrado.' });
-        return;
-      }
-      if (selectedEvent.status !== 'vendas_abertas') {
-        sendJson(response, 409, { erro: 'As vendas deste evento nao estao abertas.' });
-        return;
-      }
-      const situacao = situacaoLotes(lotsByEventStatement.all(selectedEvent.id));
+      const n8nResponse = await fetch(n8nWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telefone: payload.telefone,
+          nome: payload.nome,
+          tipo: 'texto',
+          texto: payload.mensagem,
+          id_mensagem: payload.id_mensagem,
+          timestamp: new Date().toISOString(),
+          origem: payload.origem,
+          evento_codigo: payload.evento_codigo,
+          porta_api: port,
+        }),
+      });
+      const responseText = await n8nResponse.text();
       let n8nResult = {};
-      if (situacao.tipo === 'vigente') {
-        const payloadForN8n = {
-          ...payload,
-          evento_id: selectedEvent.id,
-          evento_nome: selectedEvent.nome,
-          lote_id: situacao.lote.id,
-          lote_nome: situacao.lote.nome,
-          valor_unitario_centavos: situacao.lote.valor_centavos,
-        };
-        const n8nResponse = await fetch(n8nWebhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payloadForN8n),
-        });
-        const responseText = await n8nResponse.text();
-        if (!n8nResponse.ok) {
-          sendJson(response, 502, {
-            erro: 'O n8n nao conseguiu processar a mensagem.',
-            detalhe: responseText.slice(0, 500),
-          });
-          return;
-        }
-        try {
-          n8nResult = JSON.parse(responseText);
-        } catch {
-          n8nResult = { recebido: true };
-        }
+      try {
+        n8nResult = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        n8nResult = { erro: 'O n8n nao devolveu JSON.' };
       }
-
-      const conversationResult = processarMensagem(database, {
-        evento: selectedEvent,
-        payload,
-      });
-      sendJson(response, 200, {
-        ...n8nResult,
-        ...conversationResult,
-        evento: publicEvent(selectedEvent),
-        lote: situacao.tipo === 'vigente' ? lotePublico(situacao.lote) : null,
-        situacao: situacao.tipo,
-      });
+      if (!n8nResponse.ok) {
+        sendJson(response, n8nResponse.status >= 400 ? n8nResponse.status : 502, {
+          erro: n8nResult.erro || 'O n8n nao conseguiu processar a mensagem.',
+        });
+        return;
+      }
+      sendJson(response, 200, n8nResult);
     } catch (error) {
-      sendJson(response, 400, { erro: error.message });
+      const validacao = error.message === 'JSON invalido.' || error.message === 'Corpo da requisicao muito grande.';
+      sendJson(response, validacao ? 400 : 502, {
+        erro: validacao ? error.message : 'O n8n nao conseguiu processar a mensagem.',
+      });
     }
     return;
   }
@@ -934,6 +946,22 @@ const requestListener = async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/admin/whatsapp/fila') {
+    sendJson(response, 200, { itens: listarFalhas(database) });
+    return;
+  }
+
+  const reenfileirarMatch = url.pathname.match(/^\/admin\/whatsapp\/fila\/(\d+)\/reenfileirar$/);
+  if (request.method === 'POST' && reenfileirarMatch) {
+    try {
+      sendJson(response, 200, reenfileirar(database, Number(reenfileirarMatch[1])));
+    } catch (error) {
+      const status = error.codigo === 'NAO_ENCONTRADA' ? 404 : error.codigo === 'EXPIRADO' ? 409 : 400;
+      sendJson(response, status, { erro: error.message });
+    }
+    return;
+  }
+
   sendJson(response, 404, {
     erro: 'Rota nao encontrada.',
     rotas: [
@@ -953,6 +981,9 @@ const requestListener = async (request, response) => {
       'GET /admin/viradas',
       'POST /admin/viradas/:id/anunciada',
       'POST /admin/reservas/expirar',
+      'GET /admin/whatsapp/fila',
+      'POST /admin/whatsapp/fila/:id/reenfileirar',
+      'POST /interno/mensagem',
       'GET /eventos',
       'GET /eventos/:codigo',
       'GET /eventos/:codigo/lote-atual',
@@ -967,6 +998,7 @@ const requestListener = async (request, response) => {
 const expirationTimer = setInterval(() => {
   try {
     expirarReservas(database);
+    reterCorpos(database, retencaoDias());
   } catch (error) {
     console.error(`Falha ao expirar reservas: ${error.message}`);
   }
