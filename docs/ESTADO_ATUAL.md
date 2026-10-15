@@ -7,11 +7,11 @@ Revisão em 2026-10-12, só leitura de código e docs. **Não confirmei runtime*
 - **API HTTP local** em `api/server.mjs`: escuta `API_HOST`/`API_PORT` (padrão `127.0.0.1:8000`), cria `data/` e `data/comprovantes/`, aplica `api/schema.sql` via `DatabaseSync`.
 - **SQLite com WAL e foreign keys** (`api/schema.sql` L1–2). Consultas usam *prepared statements* (não há concatenação de SQL com input).
 - **Modelo parcial de eventos/lotes/pedidos/participantes/conversas/comprovantes** (`api/schema.sql` L16–137). Seed de demonstração se a base está vazia (`api/server.mjs` L35–106).
-- **Cálculo de total no código**, não no n8n: `valor_unitario_centavos * quantidade` em `createReservation` (`api/server.mjs` L452–456, L554, L577).
-- **Máquina de estados local** em `processConversation` (`api/server.mjs` L473–592): quantidade → nomes → CPF/RG → confirmar → reserva + Pix → espera comprovante. Disparada por `POST /simular-mensagem` (`L1124–1202`).
-- **Reserva atômica de estoque** (`BEGIN IMMEDIATE` + `UPDATE` com `quantidade_total - reservada - vendida >= ?`, L448–470, L200–204).
-- **Upload de comprovante** JPG/PNG/PDF até 5 MB, amarra pedido+telefone+evento (`L915–974`). Arquivo em `data/comprovantes/` (pasta coberta por `.gitignore` via `data/`).
-- **Aprovação/recusa humana** em `POST /admin/pedidos/:id/pagamento` (`L1003–1062`): promove participantes a `valido` ou `cancelado` e ajusta reservada/vendida.
+- **Cálculo de total na API**, em `api/lotes.mjs` (`totalCentavos`). O preço unitário do lote fica congelado no pedido.
+- **Máquina de estados local** em `api/conversa.mjs`: quantidade (cotação) → nomes → reserva e Pix, ou `CONFIRMAR` se o preço mudou. Documento não é pedido. Disparada por `POST /simular-mensagem` quando há lote vigente.
+- **Reserva atômica** em `BEGIN IMMEDIATE`: congela preço, prazo, cota do telefone e teto do evento. Não incrementa `quantidade_reservada`.
+- **Upload de comprovante** JPG/PNG/PDF até 5 MB, amarra pedido+telefone+evento. Arquivo em `data/comprovantes/` (pasta coberta por `.gitignore` via `data/`). Pedido já expirado entra em análise com a marca de recebimento tardio.
+- **Aprovação/recusa humana** em `POST /admin/pedidos/:id/pagamento`: promove participantes a `valido` ou `cancelado`. A aprovação soma `quantidade_vendida` e pode virar o lote. A recusa não mexe no saldo do lote.
 - **Lista de confirmados e CSV** (`GET .../participantes-confirmados`, `.../exportar-participantes.csv`, L801–837). Só `status_pagamento = 'aprovado'` e ingresso `valido`/`utilizado`.
 - **Check-in** por documento/protocolo, uma vez (`L840–912` e `web/admin.html` L103–238). Concorrência tratada com `WHERE status_ingresso = 'valido'`.
 - **Idempotência parcial de log**: `atendimentos.id_mensagem UNIQUE` (`schema.sql` L13); `POST /atendimentos` devolve 409 se repetir (`server.mjs` L1116–1118).
@@ -36,10 +36,7 @@ Revisão em 2026-10-12, só leitura de código e docs. **Não confirmei runtime*
 
 ## O que está quebrado ou incompleto (impacto prático)
 
-- **Dois caminhos de atendimento.** WhatsApp real passaria pelo gateway → fluxo 04 → `POST /atendimentos`. A venda (lotes, nomes, reserva) só existe em `/simular-mensagem`. Evidência: `whatsapp-gateway.mjs` L78–82 vs `server.mjs` L1188–1192 vs fluxo 04 L31–32.
-- **Lote atual do seed, na data de hoje (2026-10-12), tende a ser nulo.** 1º lote `disponivel` termina `2026-09-30`; 2º lote começa `2026-10-01` mas status `futuro`. `currentLot` exige `status === 'disponivel'` **e** janela de datas (`server.mjs` L404–411, L75–98). Sem lote, o simulador recusa venda (`L1151–1154`).
-- **Prazo de reserva não expira.** `reserva_expira_em` é gravado (`L446`, `schema.sql` L78) e o status `expirado` existe, mas nenhum job libera estoque.
-- **Cancelar conversa não solta reserva** (`server.mjs` L478–485).
+- **Dois caminhos de atendimento.** WhatsApp real passaria pelo gateway → fluxo 04 → `POST /atendimentos`. A venda (lotes, nomes, reserva) só existe em `/simular-mensagem`, e esse POST ainda depende do n8n responder antes de gravar a conversa.
 - **Mídia WhatsApp (comprovante) não é tratada.** Fluxo 04 lê texto/botão/lista, não `image`/`document`.
 - **Check-in é por CPF/RG/protocolo**, não por nome normalizado (regra de negócio alvo: lista por **nome**).
 - **Estados do pedido** no schema (`iniciado`, `aguardando_pagamento`, `concluido`…) ≠ estados alvo (`aguardando_nomes`, `em_validacao`, `revisao_manual`…).
@@ -59,6 +56,7 @@ Definidas em `.env.example` (valores de segredo **não** reproduzidos):
 - `API_HTTPS_HOST` (no `.env.example`, `127.0.0.1`; o fallback do código e o `https.env` gerado continuam `0.0.0.0`), `API_HTTPS_PORT` (8443)
 - `API_TLS_CERT_PATH`, `API_TLS_KEY_PATH` (juntas ou nenhuma)
 - `N8N_WEBHOOK_URL` (padrão `http://127.0.0.1:5678/webhook/whatsapp-mensagens`)
+- `N8N_VIRADA_LOTE_WEBHOOK_URL` — opcional; aviso de virada ou esgotamento. Vazio ou n8n fora do ar não desfaz a aprovação
 
 HTTPS: `work/https/https.env` gerado pelo script (fora do git) e carregado depois do `.env`. O verify token do GET continua em `work/whatsapp/verify-token.txt`, não no `.env`.
 
@@ -77,6 +75,26 @@ As citações de linha da revisão de 2026-10-12 podem ter deslocado depois dest
 - Testes: `node --test api/auth.test.mjs api/meta-signature.test.mjs api/simulator.test.mjs api/body.test.mjs`.
 
 **Risco do HTTPS em rede compartilhada.** O `.env.example` usa `API_HTTPS_HOST=127.0.0.1`. O código, se a variável vier vazia, e o `scripts/configurar-https-local.ps1` ainda gravam `0.0.0.0`. `scripts/iniciar-api-https.ps1` avisa quando o valor efetivo é `0.0.0.0`: quem estiver na mesma rede alcança a porta, e `POST /atendimentos` e `POST /comprovantes` ficam abertos. Admin e listagens continuam exigindo `ADMIN_TOKEN`.
+
+## Lotes e preços (2026-10-14)
+
+A virada é por quantidade vendida. `inicio` e `fim` continuam no banco e não entram na regra. O lote vigente é o de menor `ordem` com status `disponivel` e `ativo = 1`. `ativo = 0` pausa a venda desse lote. Sem lote `disponivel` e com algum `encerrado`, o evento está esgotado.
+
+A cotação, ao saber a quantidade, informa o total e não grava pedido. A reserva nasce quando o último nome chega, ou depois de `CONFIRMAR` se o preço mudou desde a cotação. Ela congela o preço, grava o prazo e conta no limite do telefone e no teto do evento. Não soma `quantidade_reservada`. Um pedido pode deixar `quantidade_vendida` acima da capacidade do lote vigente; o excedente não consome o lote seguinte.
+
+A virada ocorre na aprovação do pagamento, dentro de `BEGIN IMMEDIATE`. O lote vigente é encerrado quando os confirmados dele atingem a capacidade, o próximo `futuro` passa a `disponivel`, e entra uma linha em `viradas_lote` (`virada` ou `esgotado`). Expirar, cancelar ou recusar não reabre lote. Pedido reservado antes da virada mantém o preço gravado.
+
+O alerta no admin permanece até `POST /admin/viradas/:id/anunciada`. O webhook opcional sai depois do commit; o payload não leva telefone nem nome de comprador. `enviado_em` e `erro` ficam na própria virada.
+
+O telefone do limite é só dígitos. Contam ingressos aprovados, em análise e reservas ainda dentro do prazo, somando os pedidos daquele número. O padrão é `max_ingressos_por_pessoa = 10`; `NULL` não limita. `capacidade_maxima_evento` NULL não cria teto. O desconto é o JSON `descontos_quantidade_json`, vazio por padrão. O total em centavos é `floor((preço × quantidade × (100 − percentual) + 50) / 100)`.
+
+O prazo padrão do evento novo e do demonstração é 60 minutos. A cada 60 segundos, e em `POST /admin/reservas/expirar`, a API marca como `expirado` só o pedido que ainda está `aguardando_pagamento` com o prazo vencido. Comprovante enviado depois disso volta o pedido para `em_analise` com `recebido_apos_expirar = 1`, e o preço congelado continua. O comprovante é aceito pelo telefone do pedido (só dígitos) e pelo evento, mesmo que a conversa atual já seja outro atendimento. `cancelar` cancela o pedido que ainda espera comprovante. No estado `pagamento_em_analise`, a conversa responde que o comprovante está em análise.
+
+A conversa não pede CPF/RG. As colunas de documento ficam e aceitam vazio. Banco antigo sobe com `PRAGMA user_version`: toda migração da versão 0 para a 1 grava `backup-pre-migracao-<timestamp>` ao lado do arquivo do banco, mesmo sem recriar `participantes`. Se a tabela antiga tiver coluna extra, a migração aborta e o backup fica. Foreign keys desligam só na cópia de `participantes`, e a cópia aborta se a contagem de linhas divergir. O seed vazio cria os lotes de 20, 30 e 50 ingressos, a R$ 30, R$ 40 e R$ 50, sem data. Um demonstração antigo ganha o terceiro lote e o prazo de 60 minutos, sem apagar os lotes que já existiam.
+
+Não há override do limite por pessoa. Comprovante recusado continua fora desta etapa: a recusa libera a cota e não reabre prazo nem lote.
+
+Testes: `node --test`.
 
 ## Como rodar do zero (pelo que os scripts fazem)
 

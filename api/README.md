@@ -16,10 +16,13 @@ A API so inicia com `ADMIN_TOKEN` de pelo menos 24 caracteres. Rotas `/admin/*`,
 - `GET /exportar`: baixa todos os registros em CSV compativel com Excel.
 - `GET /eventos`: lista os eventos configurados.
 - `GET /eventos/:codigo`: mostra um evento, seus lotes e o lote atual.
-- `GET /eventos/:codigo/lote-atual`: consulta o lote disponivel para venda.
-- `POST /comprovantes`: recebe JPG, PNG ou PDF de ate 5 MB para um pedido.
+- `GET /eventos/:codigo/lote-atual`: consulta o lote vigente. Datas do lote não entram na escolha.
+- `POST /comprovantes`: recebe JPG, PNG ou PDF de ate 5 MB. Pedido expirado também entra em análise, marcado como recebido após expirar.
 - `GET /admin/pedidos`: lista pagamentos para analise local.
-- `POST /admin/pedidos/:id/pagamento`: aprova ou recusa um pagamento.
+- `POST /admin/pedidos/:id/pagamento`: aprova ou recusa um pagamento. A aprovação soma a quantidade vendida e pode virar o lote.
+- `GET /admin/viradas`: lista viradas e esgotamentos ainda não anunciados.
+- `POST /admin/viradas/:id/anunciada`: tira o alerta do admin.
+- `POST /admin/reservas/expirar`: marca como expirada a reserva que ainda espera comprovante e já passou do prazo.
 - `GET /admin/eventos/:codigo/participantes-confirmados`: lista somente ingressos liberados para entrada.
 - `GET /admin/eventos/:codigo/exportar-participantes.csv`: baixa a lista do evento para abrir no Excel.
 - `GET /admin/eventos/:codigo/check-in?busca=`: localiza um ingresso aprovado pelo documento ou protocolo.
@@ -47,8 +50,8 @@ O arquivo resultante fica em `planilha/dados/atendimentos.csv` e pode ser aberto
 
 ## Modelo generico de ingressos
 
-O banco tambem possui as tabelas `eventos`, `lotes`, `pedidos` e `participantes`. Ao iniciar uma base vazia, a API cria um evento de demonstracao com dois lotes para permitir os primeiros testes. Chaves Pix nunca sao retornadas pelas rotas publicas de consulta.
+O banco tambem possui as tabelas `eventos`, `lotes`, `pedidos`, `participantes` e `viradas_lote`. Ao iniciar uma base vazia, a API cria um evento de demonstracao com tres lotes (20, 30 e 50 ingressos; R$ 30, R$ 40 e R$ 50) e prazo de reserva de 60 minutos. A virada usa a quantidade vendida, não a data. A reserva congela o preço e não consome o saldo do lote. Chaves Pix nunca sao retornadas pelas rotas publicas de consulta.
 
-Os comprovantes ficam em `data/comprovantes/`, fora do GitHub. O envio apenas altera o pagamento para `em_analise`; a aprovacao ou recusa deve ser feita manualmente em `http://127.0.0.1:8000/admin`.
+Os comprovantes ficam em `data/comprovantes/`, fora do GitHub. O envio altera o pagamento para `em_analise`; a aprovacao ou recusa deve ser feita manualmente em `http://127.0.0.1:8000/admin`. Se `N8N_VIRADA_LOTE_WEBHOOK_URL` estiver preenchida, a aprovação avisa essa URL depois de gravar a virada. Falha nesse envio não desfaz o pagamento.
 
-No painel, cada evento possui uma exportacao propria. Documentos e telefones sao mantidos como texto para preservar zeros a esquerda. Como a lista contem dados pessoais, o arquivo exportado nao deve ser publicado no GitHub.
+No painel, cada evento possui uma exportacao propria. O alerta de virada permanece até o botão **Marcar como anunciada**. Documentos e telefones sao mantidos como texto para preservar zeros a esquerda. Como a lista contem dados pessoais, o arquivo exportado nao deve ser publicado no GitHub.

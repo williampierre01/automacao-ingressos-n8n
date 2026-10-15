@@ -110,7 +110,7 @@ Com a API e o n8n ativos, abra `http://127.0.0.1:8000/simulador`. A tela envia n
 
 Abra `http://127.0.0.1:8000/admin` para cadastrar eventos e lotes. A tela e exclusivamente local e permite configurar varios eventos sem editar o fluxo do n8n.
 
-A mesma tela mostra pagamentos em analise. O administrador pode abrir o comprovante e aprovar ou recusar. Somente a aprovacao transforma a quantidade reservada em quantidade vendida.
+A mesma tela mostra pagamentos em analise e o alerta de virada de lote. O administrador pode abrir o comprovante e aprovar ou recusar. A aprovacao soma a quantidade vendida do lote e pode encerrar o lote vigente. A reserva em si nao consome esse saldo.
 
 Cada evento tambem possui os botoes **Ver confirmados** e **Exportar para Excel**. A lista inclui somente participantes de pedidos com pagamento aprovado e pode ser usada na conferencia da entrada.
 
