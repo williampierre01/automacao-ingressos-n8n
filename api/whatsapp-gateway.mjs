@@ -185,7 +185,7 @@ if (executadoDireto()) {
     process.exit(1);
   }
   const host = '127.0.0.1';
-  const port = 8001;
+  const port = Number(process.env.GATEWAY_PORT) || 8001;
   const webhook = process.env.N8N_WEBHOOK_URL || 'http://127.0.0.1:5678/webhook/whatsapp-mensagens';
   const portaApi = process.env.API_PORT || '8000';
   const eventoCodigo = process.env.WHATSAPP_EVENTO_CODIGO || '';
