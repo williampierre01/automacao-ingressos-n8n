@@ -87,6 +87,15 @@ test('normaliza texto, botao, lista, imagem e status', () => {
   }));
   assert.equal(imagem.mensagens[0].tipo, 'imagem');
 
+  const reacao = normalizarWebhook(envelope({
+    from: '5511999998888',
+    id: 'wamid.reacao',
+    timestamp: '1760000004',
+    type: 'reaction',
+    reaction: { message_id: 'wamid.texto', emoji: '👍' },
+  }));
+  assert.equal(reacao.mensagens[0].tipo, 'reacao');
+
   const status = normalizarWebhook(envelope(null, { statuses: [{ id: 'wamid.saida', status: 'sent' }] }));
   assert.equal(status.somenteStatus, true);
   assert.equal(status.mensagens.length, 0);
@@ -155,6 +164,41 @@ test('queda no meio nao grava e o retry processa uma unica vez', async () => {
     assert.equal(repetida.resposta, undefined);
     assert.equal(contar(database, 'mensagens_saida'), 1);
     assert.equal(contar(database, 'conversas'), 1);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('reacao registra o wamid e nao responde', async () => {
+  const { database, diretorio } = await banco();
+  try {
+    const primeira = processarEntrada(database, {
+      telefone: '11944443333',
+      nome: 'Ana',
+      tipo: 'reacao',
+      texto: '',
+      id_mensagem: 'wamid.reacao',
+      origem: 'teste',
+      evento_codigo: 'festa-inexistente',
+    });
+    assert.equal(primeira.estado, 'reacao');
+    assert.equal(primeira.sem_resposta, true);
+    assert.equal(primeira.statusCode, undefined);
+    assert.equal(contar(database, 'mensagens_entrada'), 1);
+    assert.equal(contar(database, 'mensagens_saida'), 0);
+    assert.equal(contar(database, 'pedidos'), 0);
+    const repetida = processarEntrada(database, {
+      telefone: '11944443333',
+      nome: 'Ana',
+      tipo: 'reacao',
+      texto: '',
+      id_mensagem: 'wamid.reacao',
+      origem: 'teste',
+    });
+    assert.equal(repetida.duplicada, true);
+    assert.equal(contar(database, 'mensagens_entrada'), 1);
+    assert.equal(contar(database, 'mensagens_saida'), 0);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

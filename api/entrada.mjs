@@ -37,6 +37,7 @@ function tipoDe(mensagem) {
   if (bruto === 'audio') return 'audio';
   if (bruto === 'sticker') return 'figurinha';
   if (bruto === 'location') return 'localizacao';
+  if (bruto === 'reaction') return 'reacao';
   return 'desconhecido';
 }
 
@@ -115,7 +116,8 @@ export function processarEntrada(database, entrada, { agora = new Date(), antesD
   const tipo = String(entrada.tipo ?? '').trim();
   if (!wamid || !tipo) return recusar(400, 'Informe id_mensagem e tipo.');
 
-  const resolvido = respostaPronta(tipo) ? null : resolverEvento(database, String(entrada.evento_codigo ?? '').trim());
+  const ehReacao = tipo === 'reacao';
+  const resolvido = (ehReacao || respostaPronta(tipo)) ? null : resolverEvento(database, String(entrada.evento_codigo ?? '').trim());
   if (resolvido?.statusCode) return resolvido;
 
   return emTransacao(database, () => {
@@ -136,6 +138,10 @@ export function processarEntrada(database, entrada, { agora = new Date(), antesD
       recebidaEm,
       String(entrada.origem ?? 'whatsapp'),
     );
+
+    if (ehReacao) {
+      return { duplicada: false, estado: 'reacao', sem_resposta: true };
+    }
 
     const pronta = respostaPronta(tipo);
     let resultado;
