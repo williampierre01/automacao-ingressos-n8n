@@ -962,10 +962,18 @@ const requestListener = async (request, response) => {
   const reenfileirarMatch = url.pathname.match(/^\/admin\/whatsapp\/fila\/(\d+)\/reenfileirar$/);
   if (request.method === 'POST' && reenfileirarMatch) {
     try {
-      sendJson(response, 200, reenfileirar(database, Number(reenfileirarMatch[1])));
+      const confirmar = url.searchParams.get('confirmar') === '1';
+      sendJson(response, 200, reenfileirar(database, Number(reenfileirarMatch[1]), { confirmar }));
     } catch (error) {
-      const status = error.codigo === 'NAO_ENCONTRADA' ? 404 : error.codigo === 'EXPIRADO' ? 409 : 400;
-      sendJson(response, status, { erro: error.message });
+      const status = error.codigo === 'NAO_ENCONTRADA'
+        ? 404
+        : error.codigo === 'EXPIRADO' || error.codigo === 'CONFIRMAR'
+          ? 409
+          : 400;
+      sendJson(response, status, {
+        erro: error.message,
+        ...(error.codigo === 'CONFIRMAR' ? { exige_confirmacao: true } : {}),
+      });
     }
     return;
   }

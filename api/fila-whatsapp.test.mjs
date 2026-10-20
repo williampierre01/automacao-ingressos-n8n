@@ -124,7 +124,8 @@ test('falha da primeira mensagem segura a segunda do mesmo telefone', async () =
     assert.equal(segunda.status, 'entregue');
     assert.deepEqual(vistas, ['wamid.1', 'wamid.2']);
     const idFalhou = database.prepare(`SELECT id FROM fila_webhook WHERE wamid = 'wamid.1'`).get().id;
-    assert.equal(reenfileirar(database, idFalhou).status, 'pendente');
+    assert.throws(() => reenfileirar(database, idFalhou), /confirmar=1/);
+    assert.equal(reenfileirar(database, idFalhou, { confirmar: true }).status, 'pendente');
     assert.equal(database.prepare(`SELECT tentativas FROM fila_webhook WHERE id = ?`).get(idFalhou).tentativas, 0);
   } finally {
     database.close();

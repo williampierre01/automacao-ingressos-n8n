@@ -198,7 +198,14 @@ export function listarFalhas(database) {
   `).all();
 }
 
-export function reenfileirar(database, id, agora = new Date()) {
+export function reenfileirar(database, id, agoraOuOpcoes = new Date()) {
+  const opcoes = agoraOuOpcoes instanceof Date
+    ? { agora: agoraOuOpcoes, confirmar: false }
+    : {
+      agora: agoraOuOpcoes?.agora instanceof Date ? agoraOuOpcoes.agora : new Date(),
+      confirmar: Boolean(agoraOuOpcoes?.confirmar),
+    };
+  const agora = opcoes.agora;
   const linha = database.prepare('SELECT * FROM fila_webhook WHERE id = ?').get(id);
   if (!linha) {
     const error = new Error('Item da fila nao encontrado.');
@@ -213,6 +220,16 @@ export function reenfileirar(database, id, agora = new Date()) {
   if (!linha.corpo) {
     const error = new Error('O corpo deste evento ja expirou.');
     error.codigo = 'EXPIRADO';
+    throw error;
+  }
+  const maisNova = database.prepare(`
+    SELECT id FROM fila_webhook
+    WHERE telefone = ? AND id > ? AND status = 'entregue'
+    LIMIT 1
+  `).get(linha.telefone, linha.id);
+  if (maisNova && !opcoes.confirmar) {
+    const error = new Error('Ja existe uma mensagem mais nova deste telefone entregue. Envie confirmar=1 para reenfileirar.');
+    error.codigo = 'CONFIRMAR';
     throw error;
   }
   const momento = iso(agora);
