@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TEXTO_ARQUIVO, TEXTO_SO_TEXTO, normalizarWebhook, processarEntrada } from './entrada.mjs';
+import { TEXTO_ARQUIVO, TEXTO_SO_TEXTO, TEXTO_VENDAS_FECHADAS, normalizarWebhook, processarEntrada } from './entrada.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -155,6 +155,45 @@ test('queda no meio nao grava e o retry processa uma unica vez', async () => {
     assert.equal(repetida.resposta, undefined);
     assert.equal(contar(database, 'mensagens_saida'), 1);
     assert.equal(contar(database, 'conversas'), 1);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('vendas fechadas respondem texto e evento inexistente devolve 422', async () => {
+  const { database, diretorio } = await banco();
+  try {
+    database.prepare(`UPDATE eventos SET status = 'vendas_pausadas' WHERE codigo = 'evento-demonstracao'`).run();
+    const fechado = processarEntrada(database, {
+      telefone: '11955554444',
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'COMPRAR',
+      id_mensagem: 'wamid.fechado',
+      origem: 'teste',
+      evento_codigo: 'evento-demonstracao',
+    });
+    assert.equal(fechado.estado, 'vendas_fechadas');
+    assert.equal(fechado.resposta, TEXTO_VENDAS_FECHADAS);
+    assert.equal(fechado.statusCode, undefined);
+    assert.equal(database.prepare(`SELECT status FROM mensagens_saida WHERE wamid = 'wamid.fechado'`).get().status, 'pendente_envio');
+    assert.equal(contar(database, 'pedidos'), 0);
+
+    const ausente = processarEntrada(database, {
+      telefone: '11955554444',
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'COMPRAR',
+      id_mensagem: 'wamid.ausente',
+      origem: 'teste',
+      evento_codigo: 'festa-inexistente',
+    });
+    assert.equal(ausente.statusCode, 422);
+    assert.equal(ausente.erro, 'Evento festa-inexistente nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.');
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_entrada WHERE wamid = 'wamid.ausente'`).get().n, 0);
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_saida WHERE wamid = 'wamid.ausente'`).get().n, 0);
+    assert.equal(contar(database, 'pedidos'), 0);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

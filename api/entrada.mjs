@@ -4,6 +4,7 @@ import { digitosTelefone, emTransacao } from './lotes.mjs';
 export const TEXTO_ARQUIVO = 'Recebi seu arquivo. O envio de comprovante por aqui ainda nao esta disponivel.';
 export const TEXTO_SO_TEXTO = 'Por enquanto so consigo ler mensagens de texto.';
 export const TEXTO_SEM_EVENTO = 'A venda pelo WhatsApp nao esta disponivel neste momento.';
+export const TEXTO_VENDAS_FECHADAS = 'As vendas deste evento nao estao abertas.';
 
 const TIPOS_ARQUIVO = new Set(['imagem', 'documento']);
 const TIPOS_NAO_LIDOS = new Set(['audio', 'figurinha', 'localizacao', 'desconhecido']);
@@ -88,8 +89,12 @@ function recusar(statusCode, erro) {
 function resolverEvento(database, codigo) {
   if (codigo) {
     const evento = database.prepare('SELECT * FROM eventos WHERE codigo = ?').get(codigo);
-    if (!evento) return recusar(404, 'O evento selecionado nao foi encontrado.');
-    if (evento.status !== 'vendas_abertas') return recusar(409, 'As vendas deste evento nao estao abertas.');
+    if (!evento) {
+      return recusar(422, `Evento ${codigo} nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.`);
+    }
+    if (evento.status !== 'vendas_abertas') {
+      return { respostaPronta: TEXTO_VENDAS_FECHADAS, estado: 'vendas_fechadas' };
+    }
     return { evento };
   }
   const abertos = database.prepare(`

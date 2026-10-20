@@ -260,6 +260,27 @@ test('404 e 429 reagendam, 400 e 401 falham e o limite esgota', async () => {
     });
     assert.equal(esgotou.status, 'falhou');
     assert.equal(database.prepare(`SELECT status FROM fila_webhook WHERE wamid = 'wamid.limite'`).get().status, 'falhou');
+    enfileirar(database, [{
+      id_mensagem: 'wamid.evento',
+      telefone: '551190000888',
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'COMPRAR',
+      timestamp: agora.toISOString(),
+      corpo: { id: 'wamid.evento' },
+    }], { agora });
+    const evento = await processarProxima(database, {
+      agora,
+      entregar: async () => ({
+        status: 422,
+        erro: 'Evento festa-x nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.',
+      }),
+    });
+    assert.equal(evento.status, 'falhou');
+    assert.equal(
+      database.prepare(`SELECT ultimo_erro FROM fila_webhook WHERE wamid = 'wamid.evento'`).get().ultimo_erro,
+      'Evento festa-x nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.',
+    );
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });
