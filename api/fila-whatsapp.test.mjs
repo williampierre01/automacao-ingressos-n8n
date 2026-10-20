@@ -208,6 +208,64 @@ test('corpo de falha antiga sai e o banco antigo impede o gateway', async () => 
   }
 });
 
+test('404 e 429 reagendam, 400 e 401 falham e o limite esgota', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-15T12:00:00.000Z');
+  const casos = [
+    ['wamid.404', 404, 'pendente', ''],
+    ['wamid.429', 429, 'pendente', ''],
+    ['wamid.408', 408, 'pendente', ''],
+    ['wamid.425', 425, 'pendente', ''],
+    ['wamid.400', 400, 'falhou', ''],
+    ['wamid.401', 401, 'falhou', 'Nao autorizado.'],
+  ];
+  try {
+    enfileirar(database, casos.map(([id], indice) => ({
+      id_mensagem: id,
+      telefone: `551190000${indice}`,
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'COMPRAR',
+      timestamp: agora.toISOString(),
+      corpo: { id },
+    })), { agora });
+    for (const [id, http, esperado, erro] of casos) {
+      const resultado = await processarProxima(database, {
+        agora,
+        entregar: async () => ({ status: http, erro }),
+      });
+      assert.equal(resultado.status, esperado, id);
+      const linha = database.prepare('SELECT status, ultimo_erro, proxima_tentativa_em FROM fila_webhook WHERE wamid = ?').get(id);
+      assert.equal(linha.status, esperado);
+      if (esperado === 'pendente') {
+        assert.equal(linha.ultimo_erro, `HTTP ${http}`);
+        assert.ok(linha.proxima_tentativa_em > agora.toISOString());
+      } else {
+        assert.equal(linha.ultimo_erro, erro || `HTTP ${http}`);
+      }
+    }
+    enfileirar(database, [{
+      id_mensagem: 'wamid.limite',
+      telefone: '551190000999',
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'COMPRAR',
+      timestamp: agora.toISOString(),
+      corpo: { id: 'wamid.limite' },
+    }], { agora });
+    const esgotou = await processarProxima(database, {
+      agora,
+      maximo: 1,
+      entregar: async () => ({ status: 429 }),
+    });
+    assert.equal(esgotou.status, 'falhou');
+    assert.equal(database.prepare(`SELECT status FROM fila_webhook WHERE wamid = 'wamid.limite'`).get().status, 'falhou');
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
 test('entrega ao n8n envia o bearer e o gateway exige o token', async () => {
   const token = 'token-interno-de-teste-24';
   let recebido = '';

@@ -904,6 +904,7 @@ const requestListener = async (request, response) => {
           evento_codigo: payload.evento_codigo,
           porta_api: port,
         }),
+        signal: AbortSignal.timeout(30_000),
       });
       const responseText = await n8nResponse.text();
       let n8nResult = {};
@@ -920,6 +921,10 @@ const requestListener = async (request, response) => {
       }
       sendJson(response, 200, n8nResult);
     } catch (error) {
+      if (error.name === 'TimeoutError') {
+        sendJson(response, 504, { erro: 'O n8n nao respondeu em 30 segundos.' });
+        return;
+      }
       const validacao = error.message === 'JSON invalido.' || error.message === 'Corpo da requisicao muito grande.';
       sendJson(response, validacao ? 400 : 502, {
         erro: validacao ? error.message : 'O n8n nao conseguiu processar a mensagem.',

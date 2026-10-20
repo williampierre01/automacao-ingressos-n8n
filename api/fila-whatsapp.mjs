@@ -109,6 +109,16 @@ function marcarFalhou(database, id, erro, agora) {
   `).run(String(erro ?? '').slice(0, 500), momento, id);
 }
 
+function statusTransitorio(status) {
+  return status === 404 || status === 408 || status === 425 || status === 429;
+}
+
+function textoDeErro(status, erro) {
+  const texto = String(erro ?? '').trim();
+  if (texto) return texto.slice(0, 500);
+  return status ? `HTTP ${status}` : 'sem resposta';
+}
+
 function agendar(database, linha, erro, agora, limite) {
   if (Number(linha.tentativas) >= limite) {
     marcarFalhou(database, linha.id, erro, agora);
@@ -202,15 +212,16 @@ export async function processarProxima(database, {
   try {
     const resposta = await entregar(payload);
     const status = Number(resposta?.status ?? 0);
+    const detalhe = textoDeErro(status, resposta?.erro);
     if (status >= 200 && status < 300) {
       marcarEntregue(database, linha.id, agora);
       return { processou: true, status: 'entregue', id: linha.id };
     }
-    if (status >= 400 && status < 500) {
-      marcarFalhou(database, linha.id, `HTTP ${status}`, agora);
+    if (status >= 400 && status < 500 && !statusTransitorio(status)) {
+      marcarFalhou(database, linha.id, detalhe, agora);
       return { processou: true, status: 'falhou', id: linha.id };
     }
-    return agendar(database, linha, status ? `HTTP ${status}` : 'sem resposta', agora, maximo);
+    return agendar(database, linha, status ? detalhe : 'sem resposta', agora, maximo);
   } catch (error) {
     return agendar(database, linha, error.message || 'falha de rede', agora, maximo);
   }

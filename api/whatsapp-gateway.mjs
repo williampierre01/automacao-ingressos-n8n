@@ -134,9 +134,17 @@ export async function entregarAoN8n(mensagem, webhookUrl, token) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(mensagem),
+    signal: AbortSignal.timeout(30_000),
   });
-  await response.arrayBuffer();
-  return { status: response.status };
+  const texto = await response.text();
+  let erro = '';
+  try {
+    const json = texto ? JSON.parse(texto) : {};
+    if (typeof json?.erro === 'string') erro = json.erro;
+  } catch {
+    erro = '';
+  }
+  return { status: response.status, erro };
 }
 
 export function iniciarWorker(database, { entregar, portaApi = '8000', intervaloMs = 1000 } = {}) {
