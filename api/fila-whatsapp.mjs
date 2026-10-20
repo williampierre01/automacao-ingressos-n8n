@@ -153,6 +153,31 @@ export function reterCorpos(database, dias = retencaoDias(), agora = new Date())
   return { apagados: Number(result.changes) };
 }
 
+export function resumoFila(database, agora = new Date()) {
+  const contagem = database.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END), 0) AS pendentes,
+      COALESCE(SUM(CASE WHEN status = 'processando' THEN 1 ELSE 0 END), 0) AS processando
+    FROM fila_webhook
+  `).get();
+  const antigo = database.prepare(`
+    SELECT criado_em FROM fila_webhook
+    WHERE status = 'pendente'
+    ORDER BY criado_em ASC, id ASC
+    LIMIT 1
+  `).get();
+  const momento = agora instanceof Date ? agora : new Date(agora);
+  let idade = null;
+  if (antigo?.criado_em) {
+    idade = Math.max(0, Math.floor((momento.getTime() - new Date(antigo.criado_em).getTime()) / 1000));
+  }
+  return {
+    pendentes: Number(contagem.pendentes),
+    processando: Number(contagem.processando),
+    idade_pendente_mais_antigo_segundos: idade,
+  };
+}
+
 export function listarFalhas(database) {
   return database.prepare(`
     SELECT id, telefone, tipo, tentativas, ultimo_erro, criado_em, atualizado_em,

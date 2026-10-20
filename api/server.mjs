@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { listarFalhas, reenfileirar, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { listarFalhas, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -955,7 +955,7 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'GET' && url.pathname === '/admin/whatsapp/fila') {
-    sendJson(response, 200, { itens: listarFalhas(database) });
+    sendJson(response, 200, { itens: listarFalhas(database), ...resumoFila(database) });
     return;
   }
 

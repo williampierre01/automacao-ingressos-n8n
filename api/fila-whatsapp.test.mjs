@@ -14,6 +14,7 @@ import {
   exigirBancoPronto,
   processarProxima,
   reenfileirar,
+  resumoFila,
   reterCorpos,
   retomarProcessando,
 } from './fila-whatsapp.mjs';
@@ -281,6 +282,29 @@ test('404 e 429 reagendam, 400 e 401 falham e o limite esgota', async () => {
       database.prepare(`SELECT ultimo_erro FROM fila_webhook WHERE wamid = 'wamid.evento'`).get().ultimo_erro,
       'Evento festa-x nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.',
     );
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('resumo da fila conta pendentes e a idade do mais antigo', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-15T12:00:00.000Z');
+  try {
+    assert.equal(resumoFila(database, agora).pendentes, 0);
+    assert.equal(resumoFila(database, agora).idade_pendente_mais_antigo_segundos, null);
+    enfileirar(database, [
+      { id_mensagem: 'wamid.velho', telefone: '5511910000001', nome: 'Ana', tipo: 'texto', texto: 'oi', timestamp: agora.toISOString(), corpo: { id: 'wamid.velho' } },
+      { id_mensagem: 'wamid.novo', telefone: '5511910000002', nome: 'Bia', tipo: 'texto', texto: 'oi', timestamp: agora.toISOString(), corpo: { id: 'wamid.novo' } },
+    ], { agora });
+    const criado = new Date(agora.getTime() - 301_000).toISOString();
+    database.prepare(`UPDATE fila_webhook SET criado_em = ?, status = 'processando' WHERE wamid = 'wamid.novo'`).run(criado);
+    database.prepare(`UPDATE fila_webhook SET criado_em = ? WHERE wamid = 'wamid.velho'`).run(criado);
+    const resumo = resumoFila(database, agora);
+    assert.equal(resumo.pendentes, 1);
+    assert.equal(resumo.processando, 1);
+    assert.equal(resumo.idade_pendente_mais_antigo_segundos, 301);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

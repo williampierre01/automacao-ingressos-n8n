@@ -114,6 +114,8 @@
     <section class="card">
       <h2>Fila do WhatsApp</h2>
       <p>Eventos que esgotaram as tentativas. O corpo bruto some depois do prazo de retenção.</p>
+      <p id="queue-summary"></p>
+      <p id="queue-alert" class="badge" hidden></p>
       <div id="queue-list">Carregando…</div>
     </section>
 
@@ -219,6 +221,18 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.erro);
       const itens = result.itens || [];
+      const pendentes = Number(result.pendentes || 0);
+      const processando = Number(result.processando || 0);
+      const idade = result.idade_pendente_mais_antigo_segundos;
+      document.querySelector('#queue-summary').textContent = `${pendentes} pendente(s), ${processando} processando.`;
+      const alerta = document.querySelector('#queue-alert');
+      if (idade !== null && idade !== undefined && Number(idade) > 300) {
+        alerta.hidden = false;
+        alerta.textContent = `Ha um item pendente ha ${Number(idade)} segundos.`;
+      } else {
+        alerta.hidden = true;
+        alerta.textContent = '';
+      }
       queueList.innerHTML = itens.map((item) => `
         <article class="event">
           <strong>${escapeHtml(item.tipo)} · ${escapeHtml(item.telefone)}</strong>
