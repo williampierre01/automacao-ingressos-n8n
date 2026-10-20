@@ -287,7 +287,7 @@ function Iniciar-Filho([string]$argumentos) {
   return $psi
 }
 
-function Iniciar-Gateway([string]$webhook) {
+function Iniciar-Gateway([string]$webhook, [string]$eventoCodigo) {
   Parar-Processo $script:gateway
   for ($i = 0; $i -lt 25; $i++) {
     if (-not (Porta-Aberta $script:portaGateway)) { break }
@@ -295,13 +295,16 @@ function Iniciar-Gateway([string]$webhook) {
   }
   if (Porta-Aberta $script:portaGateway) { throw 'porta do gateway ocupada' }
   $psi = Iniciar-Filho '--no-warnings api/whatsapp-gateway.mjs'
+  $codigoEvento = $script:evento
+  if ($PSBoundParameters.ContainsKey('eventoCodigo')) { $codigoEvento = $eventoCodigo }
   $psi.EnvironmentVariables['META_APP_SECRET'] = $script:metaSecret
+  $psi.EnvironmentVariables['API_INTERNAL_TOKEN'] = $script:internalToken
   $psi.EnvironmentVariables['API_DATABASE_PATH'] = $script:banco
   $psi.EnvironmentVariables['API_HOST'] = '127.0.0.1'
   $psi.EnvironmentVariables['API_PORT'] = [string]$script:porta
   $psi.EnvironmentVariables['GATEWAY_PORT'] = [string]$script:portaGateway
   $psi.EnvironmentVariables['N8N_WEBHOOK_URL'] = $webhook
-  $psi.EnvironmentVariables['WHATSAPP_EVENTO_CODIGO'] = $script:evento
+  $psi.EnvironmentVariables['WHATSAPP_EVENTO_CODIGO'] = $codigoEvento
   $psi.EnvironmentVariables['API_TLS_CERT_PATH'] = ''
   $psi.EnvironmentVariables['API_TLS_KEY_PATH'] = ''
   $script:gateway = New-Object System.Diagnostics.Process
@@ -349,6 +352,58 @@ function Cenario([int]$numero, [string]$esperado, [scriptblock]$bloco) {
   } catch {
     Resultado $numero $esperado $false $_.Exception.Message
   }
+}
+
+function Enderecos-Escuta([int]$alvo) {
+  $lista = New-Object System.Collections.Generic.List[string]
+  foreach ($proto in @('tcp', 'tcpv6')) {
+    foreach ($linha in (& netstat.exe -ano -p $proto)) {
+      if ($linha -notmatch 'LISTENING') { continue }
+      $padrao = "(\S+):{0}\s+" -f $alvo
+      if ($linha -match $padrao) { $lista.Add($Matches[1]) }
+    }
+  }
+  return $lista
+}
+
+function Invoke-Webhook([string]$Body, [string]$Authorization) {
+  $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($script:webhookReal)
+  $req.Method = 'POST'
+  $req.Timeout = 30000
+  $req.ContentType = 'application/json; charset=utf-8'
+  $req.Proxy = New-Object System.Net.WebProxy
+  if ($Authorization) { [void]$req.Headers.Add('Authorization', $Authorization) }
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+  $req.ContentLength = $bytes.Length
+  $fluxo = $req.GetRequestStream()
+  $fluxo.Write($bytes, 0, $bytes.Length)
+  $fluxo.Close()
+  return Ler-Http $req
+}
+
+function Contar-ExecucoesN8n {
+  $arquivo = Join-Path $env:TEMP 'testar-entrada-n8n-exec.mjs'
+  $codigo = @'
+import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const linha = db.prepare("SELECT COUNT(*) AS n FROM execution_entity WHERE workflowId = ?").get("webhookWhatsapp0001");
+process.stdout.write(String(Number(linha.n)));
+db.close();
+'@
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($arquivo, $codigo, $utf8)
+  $caminho = Join-Path $raiz 'work\n8n-user\.n8n\database.sqlite'
+  $saida = & $script:node --no-warnings $arquivo $caminho
+  if ($LASTEXITCODE -ne 0) { throw 'consulta de execucoes do n8n falhou' }
+  return [int]([string]$saida).Trim()
+}
+
+function Entrada-De($estado, [string]$wamid) {
+  if (-not $estado) { return $null }
+  foreach ($item in (ComoLista $estado.entradas)) {
+    if ([string]$item.wamid -eq $wamid) { return $item }
+  }
+  return $null
 }
 
 function Pid-Ouvindo([int]$alvo) {
@@ -490,19 +545,27 @@ try {
   $pidN8n = Pid-Ouvindo 5678
   $nomeN8n = ''
   if ($pidN8n -gt 0) { $nomeN8n = [string](Get-Process -Id $pidN8n -ErrorAction SilentlyContinue).ProcessName }
-  $temInterno = $false
+  $temInterno = $true
   $temAdmin = $true
   $temMeta = $true
+  $temBloco = $true
   if ($pidN8n -gt 0) {
     $temInterno = Variavel-Definida $pidN8n 'API_INTERNAL_TOKEN'
     $temAdmin = Variavel-Definida $pidN8n 'ADMIN_TOKEN'
     $temMeta = Variavel-Definida $pidN8n 'META_APP_SECRET'
+    $temBloco = Variavel-Definida $pidN8n 'N8N_BLOCK_ENV_ACCESS_IN_NODE'
   }
-  if ($nomeN8n -ne 'node' -or -not $temInterno -or $temAdmin -or $temMeta) {
-    Write-Output ("FALHOU ambiente. API_INTERNAL_TOKEN={0} ADMIN_TOKEN={1} META_APP_SECRET={2} processo={3} (reinicie com scripts/iniciar-n8n.ps1)" -f $temInterno, $temAdmin, $temMeta, $nomeN8n)
+  $enderecos = Enderecos-Escuta 5678
+  $soLocal = $enderecos.Count -gt 0
+  foreach ($endereco in $enderecos) {
+    if ([string]$endereco -ne '127.0.0.1') { $soLocal = $false }
+  }
+  if ($nomeN8n -ne 'node' -or $temInterno -or $temAdmin -or $temMeta -or $temBloco -or -not $soLocal) {
+    $listaEnderecos = ($enderecos -join ',')
+    Write-Output ("FALHOU ambiente. API_INTERNAL_TOKEN={0} ADMIN_TOKEN={1} META_APP_SECRET={2} BLOCK_ENV={3} escuta={4} processo={5} (reinicie com scripts/iniciar-n8n.ps1)" -f $temInterno, $temAdmin, $temMeta, $temBloco, $listaEnderecos, $nomeN8n)
     exit 1
   }
-  Write-Output 'OK ambiente. o processo do n8n tem API_INTERNAL_TOKEN e nao tem ADMIN_TOKEN nem META_APP_SECRET'
+  Write-Output 'OK ambiente. o n8n escuta so em 127.0.0.1 e nao tem API_INTERNAL_TOKEN, ADMIN_TOKEN nem META_APP_SECRET'
 
   $portatil = Join-Path $raiz 'work\runtime\node_modules\node\bin\node.exe'
   if (Test-Path -LiteralPath $portatil) { $node = $portatil } else { $node = 'node' }
@@ -523,7 +586,15 @@ if (comando === "silenciar") {
 } else if (comando === "estado") {
   const fila = db.prepare("SELECT id, wamid, telefone, status, tentativas, proxima_tentativa_em, ultimo_erro FROM fila_webhook").all();
   const saidas = db.prepare("SELECT wamid, texto, status FROM mensagens_saida").all();
-  process.stdout.write(JSON.stringify({ fila, saidas }));
+  const entradas = db.prepare("SELECT wamid FROM mensagens_entrada").all();
+  const pedidos = Number(db.prepare("SELECT COUNT(*) AS n FROM pedidos").get().n);
+  process.stdout.write(JSON.stringify({ fila, saidas, entradas, pedidos }));
+} else if (comando === "pausar") {
+  db.prepare("UPDATE eventos SET status = 'vendas_pausadas' WHERE codigo = ?").run(process.argv[4]);
+  process.stdout.write("ok");
+} else if (comando === "abrir") {
+  db.prepare("UPDATE eventos SET status = 'vendas_abertas' WHERE codigo = ?").run(process.argv[4]);
+  process.stdout.write("ok");
 } else {
   throw new Error("comando desconhecido");
 }
@@ -550,6 +621,12 @@ const server = createServer(async (req, res) => {
     res.end("recusado");
     return;
   }
+  if (modo === "status") {
+    const codigo = Number(falhar) || 404;
+    res.writeHead(codigo, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ erro: "destino ausente" }));
+    return;
+  }
   let id = "";
   try { id = JSON.parse(body.toString("utf8")).id_mensagem || ""; } catch {}
   if (modo === "falhar-um" && id === falhar) {
@@ -558,7 +635,9 @@ const server = createServer(async (req, res) => {
     return;
   }
   try {
-    const resposta = await fetch(destino, { method: "POST", headers: { "content-type": "application/json" }, body });
+    const headers = { "content-type": "application/json" };
+    if (req.headers.authorization) headers.authorization = req.headers.authorization;
+    const resposta = await fetch(destino, { method: "POST", headers, body });
     const texto = Buffer.from(await resposta.arrayBuffer());
     res.writeHead(resposta.status, { "content-type": resposta.headers.get("content-type") || "application/json" });
     res.end(texto);
@@ -608,6 +687,7 @@ server.listen(porta, "127.0.0.1");
     exit 1
   }
 
+  $execucoesAntes = Contar-ExecucoesN8n
   $id = 'teste-entrada-' + [guid]::NewGuid().ToString('N')
   $corpo = @{
     telefone = '11955554444'
@@ -620,6 +700,8 @@ server.listen(porta, "127.0.0.1");
   $texto = ''
   if ($compra.Json) { $texto = [string]$compra.Json.resposta }
   Resultado 1 'COMPRAR pelo simulador passa no n8n e devolve a cotacao' ($compra.Status -eq 200 -and $texto -match 'Quantos ingressos') $compra.Text
+  $execucoesDepois = Contar-ExecucoesN8n
+  Resultado 11 'mensagem bem-sucedida nao grava execucao no n8n' ($execucoesDepois -eq $execucoesAntes) "contagem $execucoesAntes -> $execucoesDepois"
 
   $deNovo = Invoke-Api -Method 'POST' -Path '/simular-mensagem' -Body $corpo
   $contagem = Contar-Conversas '11955554444'
@@ -637,27 +719,10 @@ server.listen(porta, "127.0.0.1");
     evento_codigo = $evento
     porta_api = $porta
   } | ConvertTo-Json -Compress
-  $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create('http://127.0.0.1:5678/webhook/whatsapp-mensagens')
-  $req.Method = 'POST'
-  $req.Timeout = 30000
-  $req.ContentType = 'application/json; charset=utf-8'
-  $req.Proxy = New-Object System.Net.WebProxy
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($imagem)
-  $req.ContentLength = $bytes.Length
-  $fluxo = $req.GetRequestStream()
-  $fluxo.Write($bytes, 0, $bytes.Length)
-  $fluxo.Close()
-  $resp = $null
-  try { $resp = $req.GetResponse() } catch [System.Net.WebException] { $resp = $_.Exception.Response }
-  $leitor = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
-  $webhookTexto = $leitor.ReadToEnd()
-  $leitor.Close()
-  $resp.Close()
-  $webhook = $null
-  if ($webhookTexto) { $webhook = $webhookTexto | ConvertFrom-Json }
+  $webhook = Invoke-Webhook $imagem "Bearer $script:internalToken"
   $respostaImagem = ''
-  if ($webhook) { $respostaImagem = [string]$webhook.resposta }
-  Resultado 3 'imagem no mesmo webhook recebe o texto provisorio' ($respostaImagem -eq 'Recebi seu arquivo. O envio de comprovante por aqui ainda nao esta disponivel.') $webhookTexto
+  if ($webhook.Json) { $respostaImagem = [string]$webhook.Json.resposta }
+  Resultado 3 'imagem no mesmo webhook recebe o texto provisorio' ($webhook.Status -eq 200 -and $respostaImagem -eq 'Recebi seu arquivo. O envio de comprovante por aqui ainda nao esta disponivel.') $webhook.Text
 
   Iniciar-Gateway $webhookReal
 
@@ -835,6 +900,117 @@ server.listen(porta, "127.0.0.1");
     $entregue = Esperar { param($e) Saida-Pronta $e $wamid } 30
     if (Saida-Pronta $entregue $wamid) { return $true }
     return 'reenfileirou mas nao entregou'
+  }
+
+  Cenario 12 'webhook sem token nao cria mensagem nem pedido' {
+    $wamid = Novo-Wamid 'tsem'
+    $antes = Estado-Atual
+    $corpo = @{
+      telefone = '5511900001200'
+      nome = 'Teste Entrada'
+      tipo = 'texto'
+      texto = 'COMPRAR'
+      id_mensagem = $wamid
+      timestamp = (Get-Date).ToUniversalTime().ToString('o')
+      origem = 'teste'
+      evento_codigo = $script:evento
+      porta_api = $script:porta
+    } | ConvertTo-Json -Compress
+    $resp = Invoke-Webhook $corpo ''
+    $estado = Estado-Atual
+    $pedidosAntes = 0
+    $pedidosDepois = 0
+    if ($antes) { $pedidosAntes = [int]$antes.pedidos }
+    if ($estado) { $pedidosDepois = [int]$estado.pedidos }
+    if ($resp.Status -eq 401 -and -not (Entrada-De $estado $wamid) -and $pedidosDepois -eq $pedidosAntes) { return $true }
+    return "http $($resp.Status) pedidos $pedidosAntes->$pedidosDepois"
+  }
+
+  Cenario 13 'webhook com token errado nao cria mensagem nem pedido' {
+    $wamid = Novo-Wamid 'terrado'
+    $antes = Estado-Atual
+    $corpo = @{
+      telefone = '5511900001300'
+      nome = 'Teste Entrada'
+      tipo = 'texto'
+      texto = 'COMPRAR'
+      id_mensagem = $wamid
+      timestamp = (Get-Date).ToUniversalTime().ToString('o')
+      origem = 'teste'
+      evento_codigo = $script:evento
+      porta_api = $script:porta
+    } | ConvertTo-Json -Compress
+    $resp = Invoke-Webhook $corpo 'Bearer token-errado-com-24-caracteres'
+    $estado = Estado-Atual
+    $pedidosAntes = 0
+    $pedidosDepois = 0
+    if ($antes) { $pedidosAntes = [int]$antes.pedidos }
+    if ($estado) { $pedidosDepois = [int]$estado.pedidos }
+    if ($resp.Status -eq 401 -and -not (Entrada-De $estado $wamid) -and $pedidosDepois -eq $pedidosAntes) { return $true }
+    return "http $($resp.Status) pedidos $pedidosAntes->$pedidosDepois"
+  }
+
+  Cenario 14 '404 do n8n reagenda a entrega' {
+    Parar-Processo $script:gateway
+    Iniciar-Apoio 'status' '' '404'
+    Iniciar-Gateway "http://127.0.0.1:$script:portaApoio/"
+    $wamid = Novo-Wamid 't404'
+    $corpo = Bytes-Envelope '5511900001400' $wamid 'COMPRAR' 'Teste Entrada'
+    $resp = Invoke-Gateway $corpo (Assinar-Bytes $corpo)
+    $estado = Esperar {
+      param($e)
+      $linha = Fila-De $e $wamid
+      return ($linha -and $linha.status -eq 'pendente' -and [int]$linha.tentativas -ge 1)
+    } 15
+    $linha = Fila-De $estado $wamid
+    if ($resp.Status -eq 200 -and $linha -and $linha.status -eq 'pendente' -and [int]$linha.tentativas -ge 1 -and -not (Entrada-De $estado $wamid)) { return $true }
+    return "http $($resp.Status) fila $($linha.status) tentativas $($linha.tentativas)"
+  }
+
+  Cenario 15 'vendas fechadas respondem texto' {
+    & $script:node --no-warnings $script:consulta $script:banco pausar $script:evento | Out-Null
+    if ($LASTEXITCODE -ne 0) { return 'nao pausou o evento' }
+    try {
+      $wamid = Novo-Wamid 'tfechado'
+      $corpo = @{
+        telefone = '5511900001500'
+        nome = 'Teste Entrada'
+        tipo = 'texto'
+        texto = 'COMPRAR'
+        id_mensagem = $wamid
+        timestamp = (Get-Date).ToUniversalTime().ToString('o')
+        origem = 'teste'
+        evento_codigo = $script:evento
+        porta_api = $script:porta
+      } | ConvertTo-Json -Compress
+      $resp = Invoke-Webhook $corpo "Bearer $script:internalToken"
+      $estado = Estado-Atual
+      $saida = Saida-De $estado $wamid
+      $estadoResposta = ''
+      if ($resp.Json) { $estadoResposta = [string]$resp.Json.estado }
+      if ($resp.Status -eq 200 -and $estadoResposta -eq 'vendas_fechadas' -and $saida -and $saida.status -eq 'pendente_envio' -and [string]$saida.texto -match 'nao estao abertas') { return $true }
+      return "http $($resp.Status) estado $estadoResposta saida $($saida.status)"
+    } finally {
+      & $script:node --no-warnings $script:consulta $script:banco abrir $script:evento | Out-Null
+    }
+  }
+
+  Cenario 16 'evento inexistente falha na hora e grava o codigo na fila' {
+    Parar-Processo $script:apoio
+    Iniciar-Gateway $script:webhookReal 'festa-inexistente'
+    $wamid = Novo-Wamid 't422'
+    $corpo = Bytes-Envelope '5511900001600' $wamid 'COMPRAR' 'Teste Entrada'
+    $resp = Invoke-Gateway $corpo (Assinar-Bytes $corpo)
+    $estado = Esperar {
+      param($e)
+      $linha = Fila-De $e $wamid
+      return ($linha -and $linha.status -eq 'falhou' -and [string]$linha.ultimo_erro -match 'WHATSAPP_EVENTO_CODIGO')
+    } 20
+    $linha = Fila-De $estado $wamid
+    $erro = ''
+    if ($linha) { $erro = [string]$linha.ultimo_erro }
+    if ($resp.Status -eq 200 -and $linha -and $linha.status -eq 'falhou' -and $erro -match 'festa-inexistente' -and $erro -match 'WHATSAPP_EVENTO_CODIGO' -and -not (Entrada-De $estado $wamid) -and -not (Saida-De $estado $wamid)) { return $true }
+    return "http $($resp.Status) fila $($linha.status) erro $erro"
   }
 } finally {
   Parar-Processo $gateway

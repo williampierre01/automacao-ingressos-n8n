@@ -69,7 +69,7 @@ O script abre uma janela para o n8n e outra para a API. As janelas devem permane
 
 O arquivo `.env`, as credenciais, o banco SQLite e os dados recebidos nunca devem ser enviados ao GitHub.
 
-O n8n 2.34.6 bloqueia `$env` nos nos enquanto `N8N_BLOCK_ENV_ACCESS_IN_NODE` nao for a string `false`. `scripts/iniciar-n8n.ps1` define isso so no processo local, para o fluxo 04 ler `API_INTERNAL_TOKEN`. O valor nao entra no JSON do fluxo.
+O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN` no processo. Execucao bem-sucedida nao e gravada. Execucao com erro pode reter dados por ate 72 horas (`EXECUTIONS_DATA_MAX_AGE=72`); depois disso a poda apaga.
 
 Para importar e publicar o fluxo 04 sem a interface:
 
@@ -77,7 +77,7 @@ Para importar e publicar o fluxo 04 sem a interface:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publicar-fluxo-04.ps1
 ```
 
-O comando usa `n8n import:workflow --input=workflows/04-webhook-whatsapp-simulado.json` e `n8n publish:workflow --id=webhookWhatsapp0001`. Se o n8n ja estiver aberto, reinicie-o: a publicacao vale no proximo processo.
+O comando usa `n8n import:workflow --input=workflows/04-webhook-whatsapp-simulado.json` e `n8n publish:workflow --id=webhookWhatsapp0001`. Se a porta 5678 estiver em uso, o script aborta. Feche o n8n, publique e abra de novo.
 
 ## HTTPS na rede local
 
