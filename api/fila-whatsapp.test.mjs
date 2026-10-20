@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  apagarEntregues,
   enfileirar,
   exigirBancoPronto,
   processarProxima,
@@ -282,6 +283,39 @@ test('404 e 429 reagendam, 400 e 401 falham e o limite esgota', async () => {
       database.prepare(`SELECT ultimo_erro FROM fila_webhook WHERE wamid = 'wamid.evento'`).get().ultimo_erro,
       'Evento festa-x nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.',
     );
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('entrega antiga sai da fila e o registro da mensagem fica', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-15T12:00:00.000Z');
+  const antiga = new Date(agora.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    enfileirar(database, [
+      { id_mensagem: 'wamid.entrega-velha', telefone: '5511950000001', nome: 'Ana', tipo: 'texto', texto: 'oi', timestamp: agora.toISOString(), corpo: { id: 'wamid.entrega-velha' } },
+      { id_mensagem: 'wamid.entrega-nova', telefone: '5511950000002', nome: 'Bia', tipo: 'texto', texto: 'oi', timestamp: agora.toISOString(), corpo: { id: 'wamid.entrega-nova' } },
+      { id_mensagem: 'wamid.falha-velha', telefone: '5511950000003', nome: 'Caio', tipo: 'texto', texto: 'oi', timestamp: agora.toISOString(), corpo: { id: 'wamid.falha-velha' } },
+    ], { agora });
+    database.prepare(`UPDATE fila_webhook SET status = 'entregue', atualizado_em = ? WHERE wamid = 'wamid.entrega-velha'`).run(antiga);
+    database.prepare(`UPDATE fila_webhook SET status = 'entregue', atualizado_em = ? WHERE wamid = 'wamid.entrega-nova'`).run(agora.toISOString());
+    database.prepare(`UPDATE fila_webhook SET status = 'falhou', atualizado_em = ? WHERE wamid = 'wamid.falha-velha'`).run(antiga);
+    database.prepare(`
+      INSERT INTO mensagens_entrada (wamid, telefone, nome, tipo, texto, recebida_em, origem)
+      VALUES ('wamid.entrega-velha', '5511950000001', 'Ana', 'texto', 'oi', ?, 'teste')
+    `).run(antiga);
+    database.prepare(`
+      INSERT INTO mensagens_saida (wamid, texto, status, criada_em)
+      VALUES ('wamid.entrega-velha', 'resposta', 'pendente_envio', ?)
+    `).run(antiga);
+    assert.equal(apagarEntregues(database, 7, agora).apagados, 1);
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM fila_webhook WHERE wamid = 'wamid.entrega-velha'`).get().n, 0);
+    assert.equal(database.prepare(`SELECT status FROM fila_webhook WHERE wamid = 'wamid.entrega-nova'`).get().status, 'entregue');
+    assert.equal(database.prepare(`SELECT status FROM fila_webhook WHERE wamid = 'wamid.falha-velha'`).get().status, 'falhou');
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_entrada`).get().n, 1);
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_saida`).get().n, 1);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

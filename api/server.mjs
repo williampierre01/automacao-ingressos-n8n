@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { listarFalhas, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { apagarEntregues, listarFalhas, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -1007,6 +1007,7 @@ const expirationTimer = setInterval(() => {
   try {
     expirarReservas(database);
     reterCorpos(database, retencaoDias());
+    apagarEntregues(database, retencaoDias());
   } catch (error) {
     console.error(`Falha ao expirar reservas: ${error.message}`);
   }

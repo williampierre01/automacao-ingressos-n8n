@@ -143,6 +143,15 @@ export function retomarProcessando(database, agora = new Date()) {
   return { retomadas: Number(result.changes) };
 }
 
+export function apagarEntregues(database, dias = retencaoDias(), agora = new Date()) {
+  const limite = new Date(agora.getTime() - Number(dias) * 24 * 60 * 60 * 1000).toISOString();
+  const result = database.prepare(`
+    DELETE FROM fila_webhook
+    WHERE status = 'entregue' AND atualizado_em < ?
+  `).run(limite);
+  return { apagados: Number(result.changes) };
+}
+
 export function reterCorpos(database, dias = retencaoDias(), agora = new Date()) {
   const limite = new Date(agora.getTime() - Number(dias) * 24 * 60 * 60 * 1000).toISOString();
   const result = database.prepare(`
