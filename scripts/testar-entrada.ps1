@@ -386,8 +386,9 @@ function Contar-ExecucoesN8n {
   $codigo = @'
 import { DatabaseSync } from "node:sqlite";
 const db = new DatabaseSync(process.argv[2], { readOnly: true });
-const linha = db.prepare("SELECT COUNT(*) AS n FROM execution_entity WHERE workflowId = ?").get("webhookWhatsapp0001");
-process.stdout.write(String(Number(linha.n)));
+const entidades = db.prepare("SELECT COUNT(*) AS n FROM execution_entity WHERE workflowId = ? AND deletedAt IS NULL").get("webhookWhatsapp0001");
+const dados = db.prepare("SELECT COUNT(*) AS n FROM execution_data d JOIN execution_entity e ON e.id = d.executionId WHERE e.workflowId = ?").get("webhookWhatsapp0001");
+process.stdout.write(String(Number(entidades.n) + Number(dados.n)));
 db.close();
 '@
   $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -687,7 +688,35 @@ server.listen(porta, "127.0.0.1");
     exit 1
   }
 
-  $execucoesAntes = Contar-ExecucoesN8n
+  $webhookPronto = $false
+  for ($i = 0; $i -lt 40; $i++) {
+    $sonda = @{
+      telefone = '5511900000001'
+      nome = 'Sonda'
+      tipo = 'texto'
+      texto = 'oi'
+      id_mensagem = 'wamid.sonda-inativa'
+      timestamp = (Get-Date).ToUniversalTime().ToString('o')
+      origem = 'teste'
+      evento_codigo = $evento
+      porta_api = $porta
+    } | ConvertTo-Json -Compress
+    $respSonda = Invoke-Webhook $sonda ''
+    if ($respSonda.Status -eq 401) { $webhookPronto = $true; break }
+    Start-Sleep -Milliseconds 500
+  }
+  if (-not $webhookPronto) {
+    Write-Output 'FALHOU 1. COMPRAR pelo simulador passa no n8n (webhook do fluxo 04 ainda nao registrado)'
+    exit 1
+  }
+
+  $execucoesAntes = -1
+  for ($i = 0; $i -lt 8; $i++) {
+    $leitura = Contar-ExecucoesN8n
+    if ($leitura -eq $execucoesAntes) { break }
+    $execucoesAntes = $leitura
+    Start-Sleep -Milliseconds 400
+  }
   $id = 'teste-entrada-' + [guid]::NewGuid().ToString('N')
   $corpo = @{
     telefone = '11955554444'
@@ -700,6 +729,7 @@ server.listen(porta, "127.0.0.1");
   $texto = ''
   if ($compra.Json) { $texto = [string]$compra.Json.resposta }
   Resultado 1 'COMPRAR pelo simulador passa no n8n e devolve a cotacao' ($compra.Status -eq 200 -and $texto -match 'Quantos ingressos') $compra.Text
+  Start-Sleep -Milliseconds 800
   $execucoesDepois = Contar-ExecucoesN8n
   Resultado 11 'mensagem bem-sucedida nao grava execucao no n8n' ($execucoesDepois -eq $execucoesAntes) "contagem $execucoesAntes -> $execucoesDepois"
 
