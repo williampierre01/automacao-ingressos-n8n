@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
+import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ import {
   retomarProcessando,
 } from './fila-whatsapp.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
-import { receberEvento } from './whatsapp-gateway.mjs';
+import { entregarAoN8n, receberEvento } from './whatsapp-gateway.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const schema = readFileSync(join(root, 'api', 'schema.sql'), 'utf8');
@@ -192,6 +193,7 @@ test('corpo de falha antiga sai e o banco antigo impede o gateway', async () => 
         PATH: process.env.PATH,
         SystemRoot: process.env.SystemRoot,
         META_APP_SECRET: segredo,
+        API_INTERNAL_TOKEN: 'token-interno-de-teste-24',
         API_DATABASE_PATH: join(diretorio, 'antigo.sqlite'),
       },
     });
@@ -204,4 +206,42 @@ test('corpo de falha antiga sai e o banco antigo impede o gateway', async () => 
   } finally {
     await rm(diretorio, { recursive: true, force: true });
   }
+});
+
+test('entrega ao n8n envia o bearer e o gateway exige o token', async () => {
+  const token = 'token-interno-de-teste-24';
+  let recebido = '';
+  const server = createServer((req, res) => {
+    recebido = req.headers.authorization || '';
+    res.writeHead(204);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endereco = server.address();
+  try {
+    const resposta = await entregarAoN8n(
+      { id_mensagem: 'wamid.bearer' },
+      `http://127.0.0.1:${endereco.port}/webhook`,
+      token,
+    );
+    assert.equal(resposta.status, 204);
+    assert.equal(recebido, `Bearer ${token}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  const child = spawn(process.execPath, ['api/whatsapp-gateway.mjs'], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      META_APP_SECRET: segredo,
+    },
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.notEqual(code, 0);
+  assert.match(stderr, /API_INTERNAL_TOKEN nao definido/);
 });

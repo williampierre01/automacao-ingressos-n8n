@@ -889,7 +889,10 @@ const requestListener = async (request, response) => {
 
       const n8nResponse = await fetch(n8nWebhook, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${internalToken}`,
+        },
         body: JSON.stringify({
           telefone: payload.telefone,
           nome: payload.nome,

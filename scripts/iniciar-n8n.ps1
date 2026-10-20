@@ -9,8 +9,8 @@ if (-not (Test-Path -LiteralPath $envFile)) {
 }
 
 function Permitida-NoN8n([string]$nome) {
-    # So o que o fluxo 04 e o arranque do n8n usam. O script define as N8N_* de host logo abaixo.
-    return $nome -eq 'N8N_ENCRYPTION_KEY' -or $nome -eq 'GENERIC_TIMEZONE' -or $nome -eq 'TZ' -or $nome -eq 'API_INTERNAL_TOKEN'
+    # O fluxo 04 recebe o Bearer na requisicao. O processo do n8n nao leva o token interno.
+    return $nome -eq 'N8N_ENCRYPTION_KEY' -or $nome -eq 'GENERIC_TIMEZONE' -or $nome -eq 'TZ'
 }
 
 $chavesDoArquivo = New-Object System.Collections.Generic.List[string]
@@ -31,7 +31,7 @@ foreach ($nome in $chavesDoArquivo) {
     }
 }
 
-foreach ($nome in @('ADMIN_TOKEN', 'META_APP_SECRET')) {
+foreach ($nome in @('ADMIN_TOKEN', 'META_APP_SECRET', 'API_INTERNAL_TOKEN', 'N8N_BLOCK_ENV_ACCESS_IN_NODE')) {
     [Environment]::SetEnvironmentVariable($nome, $null, 'Process')
 }
 
@@ -40,8 +40,9 @@ $env:N8N_HOST = 'localhost'
 $env:N8N_PORT = '5678'
 $env:N8N_PROTOCOL = 'http'
 $env:N8N_SECURE_COOKIE = 'false'
-# n8n 2.34.6 bloqueia $env no no enquanto esta variavel nao for a string false.
-$env:N8N_BLOCK_ENV_ACCESS_IN_NODE = 'false'
+$env:N8N_LISTEN_ADDRESS = '127.0.0.1'
+$env:EXECUTIONS_DATA_PRUNE = 'true'
+$env:EXECUTIONS_DATA_MAX_AGE = '72'
 $env:npm_config_cache = Join-Path $projectRoot 'work\npm-cache'
 
 $portableNodeFolder = Join-Path $projectRoot 'work\runtime\node_modules\node\bin'

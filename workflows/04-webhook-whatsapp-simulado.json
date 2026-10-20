@@ -25,7 +25,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.API_INTERNAL_TOKEN }}"
+              "value": "={{ $json.headers.authorization || '' }}"
             }
           ]
         },
@@ -90,7 +90,9 @@
   },
   "pinData": {},
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
   },
   "active": false,
   "tags": []

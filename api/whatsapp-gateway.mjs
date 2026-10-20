@@ -126,10 +126,13 @@ export function criarGateway({ database, appSecret, verifyToken, eventoCodigo = 
   });
 }
 
-export async function entregarAoN8n(mensagem, webhookUrl) {
+export async function entregarAoN8n(mensagem, webhookUrl, token) {
   const response = await fetch(webhookUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify(mensagem),
   });
   await response.arrayBuffer();
@@ -170,6 +173,7 @@ function executadoDireto() {
 
 if (executadoDireto()) {
   const appSecret = requireSecret('META_APP_SECRET');
+  const internalToken = requireSecret('API_INTERNAL_TOKEN');
   const databasePath = process.env.API_DATABASE_PATH || join(projectRoot, 'data', 'atendimentos.sqlite');
   let database;
   try {
@@ -191,7 +195,7 @@ if (executadoDireto()) {
   const eventoCodigo = process.env.WHATSAPP_EVENTO_CODIGO || '';
   const pararWorker = iniciarWorker(database, {
     portaApi,
-    entregar: (mensagem) => entregarAoN8n(mensagem, webhook),
+    entregar: (mensagem) => entregarAoN8n(mensagem, webhook, internalToken),
   });
   const server = criarGateway({ database, appSecret, verifyToken, eventoCodigo });
   server.listen(port, host, () => {
