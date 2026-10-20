@@ -18,7 +18,7 @@ import {
   retomarProcessando,
 } from './fila-whatsapp.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
-import { entregarAoN8n, receberEvento } from './whatsapp-gateway.mjs';
+import { entregarAoN8n, iniciarWorker, receberEvento } from './whatsapp-gateway.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const schema = readFileSync(join(root, 'api', 'schema.sql'), 'utf8');
@@ -281,6 +281,35 @@ test('404 e 429 reagendam, 400 e 401 falham e o limite esgota', async () => {
       database.prepare(`SELECT ultimo_erro FROM fila_webhook WHERE wamid = 'wamid.evento'`).get().ultimo_erro,
       'Evento festa-x nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.',
     );
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('worker segue na hora quando processou uma mensagem', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-15T12:00:00.000Z');
+  try {
+    enfileirar(database, [
+      { id_mensagem: 'wamid.ciclo1', telefone: '5511911110001', nome: 'Ana', tipo: 'texto', texto: 'COMPRAR', timestamp: agora.toISOString(), corpo: { id: 'wamid.ciclo1' } },
+      { id_mensagem: 'wamid.ciclo2', telefone: '5511911110002', nome: 'Bia', tipo: 'texto', texto: 'COMPRAR', timestamp: agora.toISOString(), corpo: { id: 'wamid.ciclo2' } },
+    ], { agora });
+    let entregues = 0;
+    const parar = iniciarWorker(database, {
+      intervaloMs: 5000,
+      entregar: async () => {
+        entregues += 1;
+        return { status: 200 };
+      },
+    });
+    const inicio = Date.now();
+    while (entregues < 2 && Date.now() - inicio < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    parar();
+    assert.equal(entregues, 2);
+    assert.ok(Date.now() - inicio < 2000);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

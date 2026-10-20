@@ -11,8 +11,6 @@ import {
   exigirBancoPronto,
   maxTentativas,
   processarProxima,
-  reterCorpos,
-  retencaoDias,
   retomarProcessando,
 } from './fila-whatsapp.mjs';
 import { verifyHubSignature } from './meta-signature.mjs';
@@ -153,17 +151,18 @@ export function iniciarWorker(database, { entregar, portaApi = '8000', intervalo
   let timer = null;
   const ciclo = async () => {
     if (parado) return;
+    let espera = intervaloMs;
     try {
-      reterCorpos(database, retencaoDias());
-      await processarProxima(database, {
+      const resultado = await processarProxima(database, {
         entregar,
         maximo: maxTentativas(),
         portaApi,
       });
+      if (resultado.processou) espera = 0;
     } catch (error) {
       console.error(`Falha na fila: ${error.message}`);
     } finally {
-      if (!parado) timer = setTimeout(ciclo, intervaloMs);
+      if (!parado) timer = setTimeout(ciclo, espera);
     }
   };
   timer = setTimeout(ciclo, 0);
