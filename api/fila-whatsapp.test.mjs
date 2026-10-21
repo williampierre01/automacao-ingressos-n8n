@@ -75,7 +75,10 @@ test('assinatura invalida nao entra na fila', async () => {
     }));
     const ignorado = receberEvento(database, status, { signature: assinar(status), appSecret: segredo });
     assert.equal(ignorado.json.ignorado, true);
+    assert.equal(ignorado.json.custos, 1);
     assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM fila_webhook').get().n), 1);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM mensagens_custo').get().n), 1);
+    assert.equal(database.prepare('SELECT billable FROM mensagens_custo').get().billable, null);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

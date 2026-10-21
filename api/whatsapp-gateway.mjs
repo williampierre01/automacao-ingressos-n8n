@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireSecret, tokensMatch } from './auth.mjs';
 import { readBody, requestBodyError } from './body.mjs';
 import { normalizarWebhook } from './entrada.mjs';
+import { aplicarStatuses } from './custo-whatsapp.mjs';
 import {
   enfileirar,
   exigirBancoPronto,
@@ -13,6 +14,7 @@ import {
   processarProxima,
   retomarProcessando,
 } from './fila-whatsapp.mjs';
+import { emTransacao } from './lotes.mjs';
 import { verifyHubSignature } from './meta-signature.mjs';
 
 const apiFolder = dirname(fileURLToPath(import.meta.url));
@@ -64,15 +66,27 @@ export function receberEvento(database, rawBody, {
     return { status: 400, texto: `Requisicao invalida: ${error.message}` };
   }
   const normalizado = normalizarWebhook(json, agora);
-  if (normalizado.mensagens.length === 0) {
-    return { status: 200, json: { recebido: true, ignorado: true } };
+  try {
+    const resultado = emTransacao(database, () => {
+      const custo = aplicarStatuses(database, json, agora);
+      const fila = normalizado.mensagens.length > 0
+        ? enfileirar(database, normalizado.mensagens, { origem: 'whatsapp', eventoCodigo, agora })
+        : { novas: 0 };
+      return { custo, fila };
+    });
+    return {
+      status: 200,
+      json: {
+        recebido: true,
+        ignorado: normalizado.mensagens.length === 0,
+        enfileiradas: resultado.fila.novas,
+        custos: resultado.custo.gravados,
+      },
+    };
+  } catch (error) {
+    console.error(`Falha ao gravar webhook: ${error.message}`);
+    return { status: 500, texto: 'Falha ao gravar o evento.' };
   }
-  const fila = enfileirar(database, normalizado.mensagens, {
-    origem: 'whatsapp',
-    eventoCodigo,
-    agora,
-  });
-  return { status: 200, json: { recebido: true, enfileiradas: fila.novas } };
 }
 
 export function criarGateway({ database, appSecret, verifyToken, eventoCodigo = '' }) {
