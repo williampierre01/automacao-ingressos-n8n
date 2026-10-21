@@ -10,6 +10,7 @@ import { processarEntrada } from './entrada.mjs';
 import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
+import { iniciarRetencao } from './retencao-comprovantes.mjs';
 import { rodarRotinas } from './rotinas.mjs';
 import {
   MENSAGEM_ESGOTADO,
@@ -1110,6 +1111,8 @@ const expirationTimer = setInterval(() => {
 }, 60_000);
 expirationTimer.unref();
 
+const pararRetencao = iniciarRetencao(database, { pasta: receiptsFolder });
+
 const pararEnvio = iniciarEnvio(database, {
   config: envioConfig,
   enviar: (mensagem) => enviarTexto({
@@ -1140,6 +1143,7 @@ secureServer?.listen(httpsPort, httpsHost, () => {
 
 function closeServer() {
   clearInterval(expirationTimer);
+  pararRetencao();
   pararEnvio();
   let pendingServers = secureServer ? 2 : 1;
   const afterClose = () => {
