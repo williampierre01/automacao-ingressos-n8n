@@ -1164,7 +1164,7 @@ test('rota de aprovacao nao falha com webhook indisponivel e o alerta sai ao anu
 });
 
 test('comprovante de outro telefone responde 403', async () => {
-  const api = await startApi({});
+  const api = await startApi({ SIMULADOR_ATIVO: '1' });
   try {
     const loteAtual = await fetch(`http://127.0.0.1:${api.port}/eventos/evento-demonstracao/lote-atual`);
     const corpo = await loteAtual.json();

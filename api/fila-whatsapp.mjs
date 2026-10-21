@@ -12,6 +12,23 @@ function corpoSemPortaDeTeste(corpo) {
   return copia;
 }
 
+function camposMidia(corpo) {
+  let json = {};
+  try {
+    json = typeof corpo === 'string' ? JSON.parse(corpo || '{}') : (corpo || {});
+  } catch {
+    json = {};
+  }
+  const midia = json.image || json.document || {};
+  if (!midia.id) return {};
+  return {
+    midia_id: String(midia.id),
+    midia_mime: String(midia.mime_type || ''),
+    midia_sha256: String(midia.sha256 || ''),
+    midia_nome: String(midia.filename || ''),
+  };
+}
+
 export function montarPayloadEntrega(linha, { portaApi = '', usarPortaTeste = false } = {}) {
   const payload = {
     telefone: linha.telefone,
@@ -22,6 +39,7 @@ export function montarPayloadEntrega(linha, { portaApi = '', usarPortaTeste = fa
     timestamp: linha.timestamp_mensagem,
     origem: linha.origem,
     evento_codigo: linha.evento_codigo,
+    ...camposMidia(linha.corpo),
   };
   const porta = String(portaApi ?? '');
   if (usarPortaTeste && /^\d+$/.test(porta)) {

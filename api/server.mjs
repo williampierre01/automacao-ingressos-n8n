@@ -3,13 +3,13 @@ import { createServer as createHttpsServer } from 'node:https';
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
 import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
-import { configEnvio, enviarTexto } from './graph-whatsapp.mjs';
+import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { rodarRotinas } from './rotinas.mjs';
 import {
   MENSAGEM_ESGOTADO,
@@ -684,6 +684,10 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/comprovantes') {
+    if (!simulatorEnabled) {
+      sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+      return;
+    }
     try {
       const body = await readJson(request, 7_000_000);
       const orderId = positiveInteger(body.pedido_id);
@@ -704,7 +708,8 @@ const requestListener = async (request, response) => {
         return;
       }
       const receiptId = randomUUID();
-      const filePath = join(receiptsFolder, `${receiptId}.${allowedTypes[mimeType]}`);
+      const fileName = `${receiptId}.${allowedTypes[mimeType]}`;
+      const filePath = join(receiptsFolder, fileName);
       writeFileSync(filePath, file, { flag: 'wx' });
       try {
         const registrado = registrarComprovante(database, {
@@ -714,8 +719,9 @@ const requestListener = async (request, response) => {
           comprovanteId: receiptId,
           nomeOriginal: originalName,
           tipoMime: mimeType,
-          caminho: filePath,
+          caminho: fileName,
           tamanhoBytes: file.length,
+          sha256: createHash('sha256').update(file).digest('hex'),
         });
         sendJson(response, 201, {
           recebido: true,
@@ -750,16 +756,31 @@ const requestListener = async (request, response) => {
   const receiptMatch = url.pathname.match(/^\/admin\/comprovantes\/([a-f0-9-]+)$/);
   if (request.method === 'GET' && receiptMatch) {
     const receipt = receiptByIdStatement.get(receiptMatch[1]);
-    if (!receipt) {
+    if (!receipt || receipt.apagado_em) {
       sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
       return;
+    }
+    const filePath = caminhoDentroDaPasta(receiptsFolder, receipt.caminho);
+    if (!filePath) {
+      sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
+      return;
+    }
+    let conteudo;
+    try {
+      conteudo = readFileSync(filePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
+        return;
+      }
+      throw error;
     }
     response.writeHead(200, {
       'Content-Type': receipt.tipo_mime,
       'Content-Disposition': `inline; filename="${receipt.nome_original.replaceAll('"', '')}"`,
       'Cache-Control': 'no-store',
     });
-    response.end(readFileSync(receipt.caminho));
+    response.end(conteudo);
     return;
   }
 
@@ -868,7 +889,7 @@ const requestListener = async (request, response) => {
     }
     try {
       const body = await readJson(request);
-      const resultado = processarEntrada(database, {
+      const resultado = await processarEntrada(database, {
         telefone: normalizeText(body.telefone, 30),
         nome: normalizeText(body.nome, 150),
         tipo: normalizeText(body.tipo, 30),
@@ -877,7 +898,11 @@ const requestListener = async (request, response) => {
         timestamp: normalizeText(body.timestamp, 40),
         origem: normalizeText(body.origem, 100) || 'whatsapp',
         evento_codigo: normalizeText(body.evento_codigo, 100).toLowerCase(),
-      });
+        midia_id: normalizeText(body.midia_id, 200),
+        midia_mime: normalizeText(body.midia_mime, 100),
+        midia_sha256: normalizeText(body.midia_sha256, 128),
+        midia_nome: normalizeText(body.midia_nome, 250),
+      }, { pastaComprovantes: receiptsFolder });
       if (resultado.statusCode) {
         sendJson(response, resultado.statusCode, { erro: resultado.erro });
         return;

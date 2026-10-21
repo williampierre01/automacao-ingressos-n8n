@@ -794,7 +794,7 @@ server.listen(porta, "127.0.0.1");
   $webhook = Invoke-Webhook $imagem "Bearer $script:internalToken"
   $respostaImagem = ''
   if ($webhook.Json) { $respostaImagem = [string]$webhook.Json.resposta }
-  Resultado 3 'imagem no mesmo webhook recebe o texto provisorio' ($webhook.Status -eq 200 -and $respostaImagem -eq 'Recebi seu arquivo. O envio de comprovante por aqui ainda nao esta disponivel.') $webhook.Text
+  Resultado 3 'imagem sem reserva responde que nao ha comprovante esperado' ($webhook.Status -eq 200 -and $respostaImagem -eq 'Nao ha reserva esperando comprovante.') $webhook.Text
 
   Iniciar-Gateway $webhookReal
 

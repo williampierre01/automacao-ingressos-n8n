@@ -151,7 +151,7 @@ export async function entregarAoN8n(mensagem, webhookUrl, token) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(mensagem),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(45_000),
   });
   const texto = await response.text();
   let erro = '';

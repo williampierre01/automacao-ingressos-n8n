@@ -68,9 +68,11 @@ test('simulador desligado responde 404', async () => {
       body: '{}',
     });
     const health = await fetch(`http://127.0.0.1:${api.port}/saude`);
+    const comprovante = await fetch(`http://127.0.0.1:${api.port}/comprovantes`, { method: 'POST' });
     assert.equal(home.status, 404);
     assert.equal(page.status, 404);
     assert.equal(post.status, 404);
+    assert.equal(comprovante.status, 404);
     assert.equal(health.status, 200);
   } finally {
     await stopApi(api);

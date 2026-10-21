@@ -450,6 +450,7 @@ export function registrarComprovante(database, {
   tipoMime,
   caminho,
   tamanhoBytes,
+  sha256 = null,
   agora = new Date(),
 }) {
   const momento = iso(agora);
@@ -484,9 +485,9 @@ export function registrarComprovante(database, {
       tardio = true;
     }
     database.prepare(`
-      INSERT INTO comprovantes (id, pedido_id, nome_original, tipo_mime, caminho, tamanho_bytes, recebido_em)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(comprovanteId, pedidoId, nomeOriginal, tipoMime, caminho, tamanhoBytes, momento);
+      INSERT INTO comprovantes (id, pedido_id, nome_original, tipo_mime, caminho, tamanho_bytes, sha256, recebido_em)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(comprovanteId, pedidoId, nomeOriginal, tipoMime, caminho, tamanhoBytes, sha256 ?? null, momento);
     database.prepare(`
       UPDATE conversas SET estado = 'pagamento_em_analise', atualizado_em = ? WHERE pedido_id = ?
     `).run(momento, pedidoId);
