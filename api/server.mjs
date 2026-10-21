@@ -7,7 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
+import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { rodarRotinas } from './rotinas.mjs';
 import {
   MENSAGEM_ESGOTADO,
@@ -50,6 +52,8 @@ if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
 
 const adminToken = requireSecret('ADMIN_TOKEN');
 const internalToken = requireSecret('API_INTERNAL_TOKEN');
+const envioConfig = configEnvio();
+if (envioConfig.motivo) console.error(envioConfig.motivo);
 
 mkdirSync(dataFolder, { recursive: true });
 mkdirSync(receiptsFolder, { recursive: true });
@@ -1005,6 +1009,34 @@ const requestListener = async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/admin/whatsapp/saidas') {
+    sendJson(response, 200, {
+      ...resumoSaidas(database),
+      envio_ativo: Boolean(envioConfig.ativo),
+      itens: listarSaidasAlerta(database),
+    });
+    return;
+  }
+
+  const reenviarMatch = url.pathname.match(/^\/admin\/whatsapp\/saidas\/(\d+)\/reenviar$/);
+  if (request.method === 'POST' && reenviarMatch) {
+    try {
+      const confirmar = url.searchParams.get('confirmar') === '1';
+      sendJson(response, 200, reenviarSaida(database, Number(reenviarMatch[1]), { confirmar }));
+    } catch (error) {
+      const status = error.codigo === 'NAO_ENCONTRADA'
+        ? 404
+        : error.codigo === 'CONFIRMAR'
+          ? 409
+          : 400;
+      sendJson(response, status, {
+        erro: error.message,
+        ...(error.codigo === 'CONFIRMAR' ? { exige_confirmacao: true } : {}),
+      });
+    }
+    return;
+  }
+
   sendJson(response, 404, {
     erro: 'Rota nao encontrada.',
     rotas: [
@@ -1026,6 +1058,8 @@ const requestListener = async (request, response) => {
       'POST /admin/reservas/expirar',
       'GET /admin/whatsapp/fila',
       'POST /admin/whatsapp/fila/:id/reenfileirar',
+      'GET /admin/whatsapp/saidas',
+      'POST /admin/whatsapp/saidas/:id/reenviar',
       'POST /interno/mensagem',
       'GET /eventos',
       'GET /eventos/:codigo',
@@ -1051,6 +1085,17 @@ const expirationTimer = setInterval(() => {
 }, 60_000);
 expirationTimer.unref();
 
+const pararEnvio = iniciarEnvio(database, {
+  config: envioConfig,
+  enviar: (mensagem) => enviarTexto({
+    base: envioConfig.base,
+    versao: envioConfig.versao,
+    phoneNumberId: envioConfig.phoneNumberId,
+    token: envioConfig.token,
+    ...mensagem,
+  }),
+});
+
 const server = createHttpServer(requestListener);
 const secureServer = tlsCertificatePath && tlsKeyPath
   ? createHttpsServer({
@@ -1070,6 +1115,7 @@ secureServer?.listen(httpsPort, httpsHost, () => {
 
 function closeServer() {
   clearInterval(expirationTimer);
+  pararEnvio();
   let pendingServers = secureServer ? 2 : 1;
   const afterClose = () => {
     pendingServers -= 1;
