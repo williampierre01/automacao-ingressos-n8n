@@ -261,7 +261,7 @@
       const event = result.evento;
       const lot = result.lote_atual;
       const greeting = lot
-        ? `${event.mensagem_boas_vindas || 'Olá!'}\n\n${event.nome}\nData: ${event.data_evento}${event.horario ? ` às ${event.horario}` : ''}\nLocal: ${event.local}\n${lot.nome}: R$ ${lot.valor}\nDisponíveis: ${lot.disponivel}`
+        ? `${event.mensagem_boas_vindas || 'Olá!'}\n\n${event.nome}\nData: ${event.data_evento}${event.horario ? ` às ${event.horario}` : ''}\nLocal: ${event.local}\n${lot.nome}: R$ ${lot.valor}`
         : `${event.nome}\nNão existe lote disponível neste momento.`;
       addBubble(greeting, lot ? 'received' : 'error', 'informações atuais');
     }

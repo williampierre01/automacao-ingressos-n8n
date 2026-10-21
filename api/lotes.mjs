@@ -87,6 +87,21 @@ export function lotePublico(lote) {
   };
 }
 
+export function loteCatalogo(lote) {
+  const publico = lotePublico(lote);
+  const {
+    quantidade_total,
+    quantidade_reservada,
+    quantidade_vendida,
+    disponivel,
+    ...resto
+  } = publico;
+  let vagas = 'esgotado';
+  if (lote.status === 'futuro' || Number(lote.ativo ?? 1) === 0) vagas = 'fechado';
+  else if (lote.status === 'disponivel') vagas = 'aberto';
+  return { ...resto, vagas };
+}
+
 export function situacaoLotes(lotes) {
   const ordenados = [...lotes].sort((a, b) => (
     Number(a.ordem) - Number(b.ordem) || Number(a.id) - Number(b.id)

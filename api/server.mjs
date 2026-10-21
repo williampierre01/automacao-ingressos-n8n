@@ -17,6 +17,7 @@ import {
   expirarReservas,
   garantirEventoDemonstracao,
   listarViradasPendentes,
+  loteCatalogo,
   lotePublico,
   marcarAnunciada,
   migrar,
@@ -399,13 +400,13 @@ const requestListener = async (request, response) => {
       sendJson(response, 404, { erro: 'Evento nao encontrado.' });
       return;
     }
-    const lots = lotsByEventStatement.all(event.id).map(lotePublico);
-    const situacao = situacaoLotes(lots);
+    const lots = lotsByEventStatement.all(event.id).map(loteCatalogo);
+    const situacao = situacaoLotes(lotsByEventStatement.all(event.id));
     sendJson(response, 200, {
       evento: publicEvent(event),
       lotes: lots,
       situacao: situacao.tipo,
-      lote_atual: situacao.tipo === 'vigente' ? lotePublico(situacao.lote) : null,
+      lote_atual: situacao.tipo === 'vigente' ? loteCatalogo(situacao.lote) : null,
     });
     return;
   }
@@ -435,7 +436,7 @@ const requestListener = async (request, response) => {
       sendJson(response, 404, { erro: 'Nao existe lote disponivel neste momento.', situacao: situacao.tipo });
       return;
     }
-    sendJson(response, 200, { evento: publicEvent(event), lote: lotePublico(situacao.lote), situacao: situacao.tipo });
+    sendJson(response, 200, { evento: publicEvent(event), lote: loteCatalogo(situacao.lote), situacao: situacao.tipo });
     return;
   }
 
@@ -510,6 +511,15 @@ const requestListener = async (request, response) => {
   }
 
   const createLotMatch = url.pathname.match(/^\/admin\/eventos\/([^/]+)\/lotes$/);
+  if (request.method === 'GET' && createLotMatch) {
+    const event = eventByCodeStatement.get(decodeURIComponent(createLotMatch[1]));
+    if (!event) {
+      sendJson(response, 404, { erro: 'Evento nao encontrado.' });
+      return;
+    }
+    sendJson(response, 200, { lotes: lotsByEventStatement.all(event.id).map(lotePublico) });
+    return;
+  }
   if (request.method === 'POST' && createLotMatch) {
     try {
       const eventCode = decodeURIComponent(createLotMatch[1]);
@@ -1002,7 +1012,7 @@ const requestListener = async (request, response) => {
       'GET /admin',
       'POST /simular-mensagem',
       'POST /admin/eventos',
-      'POST /admin/eventos/:codigo/lotes',
+      'GET /admin/eventos/:codigo/lotes',
       'GET /admin/eventos/:codigo/participantes-confirmados',
       'GET /admin/eventos/:codigo/exportar-participantes.csv',
       'GET /admin/eventos/:codigo/check-in?busca=',

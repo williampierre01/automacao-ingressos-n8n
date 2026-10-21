@@ -1113,7 +1113,18 @@ test('rota de aprovacao nao falha com webhook indisponivel e o alerta sai ao anu
     assert.equal(loteAtual.status, 200);
     assert.equal(corpo.lote.nome, 'Primeiro lote');
     assert.equal(corpo.lote.valor, '30,00');
-    assert.equal(corpo.lote.disponivel, 20);
+    assert.equal(corpo.lote.vagas, 'aberto');
+    assert.equal(corpo.lote.disponivel, undefined);
+    assert.equal(corpo.lote.quantidade_vendida, undefined);
+    assert.equal(corpo.lote.quantidade_total, undefined);
+    assert.equal(corpo.lote.quantidade_reservada, undefined);
+    const adminLotes = await fetch(`http://127.0.0.1:${api.port}/admin/eventos/evento-demonstracao/lotes`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const lotesAdmin = await adminLotes.json();
+    assert.equal(adminLotes.status, 200);
+    assert.equal(lotesAdmin.lotes[0].quantidade_total, 20);
+    assert.equal(lotesAdmin.lotes[0].disponivel, 20);
     const database = new DatabaseSync(api.databasePath);
     database.exec('PRAGMA busy_timeout = 5000');
     const eventoId = corpo.lote.evento_id;

@@ -175,6 +175,13 @@ function Pedido-DoTelefone($lista, [string]$telefone) {
   return $null
 }
 
+function Lote-Sqlite([string]$nome) {
+  foreach ($item in (ComoLista (Consultar-Sqlite $banco 'lotes' ''))) {
+    if ($item.nome -eq $nome) { return $item }
+  }
+  return $null
+}
+
 function Evento-Atual {
   return Invoke-Api -Method 'GET' -Path "/eventos/$evento"
 }
@@ -202,6 +209,9 @@ if (comando === "consultar") {
   const past = new Date(Date.now() - 120000).toISOString();
   const result = db.prepare("UPDATE pedidos SET reserva_expira_em = ? WHERE comprador_telefone = ? AND status = 'aguardando_pagamento'").run(past, telefone);
   process.stdout.write(JSON.stringify({ changes: Number(result.changes) }));
+} else if (comando === "lotes") {
+  const rows = db.prepare("SELECT nome, status, quantidade_vendida, quantidade_total, quantidade_reservada, encerrado_em FROM lotes").all();
+  process.stdout.write(JSON.stringify(rows));
 } else if (comando === "limpar-atendimentos") {
   const result = db.prepare("DELETE FROM atendimentos WHERE id_mensagem LIKE 'teste-lotes-%'").run();
   process.stdout.write(JSON.stringify({ changes: Number(result.changes) }));
@@ -403,8 +413,7 @@ try {
 
   $aprovaB = Decidir-Pedido $reservaB.Json.pedido_id 'aprovar'
   $aprovaC = Decidir-Pedido $reservaC.Json.pedido_id 'aprovar'
-  $antesDaVirada = Evento-Atual
-  $lote1Antes = Lote-PorNome $antesDaVirada.Json 'Primeiro lote'
+  $lote1Antes = Lote-Sqlite 'Primeiro lote'
   $marcoEncerrado = [string]$lote1Antes.encerrado_em
 
   $cotacaoG = Enviar $telG 'COMPRAR'
@@ -413,9 +422,8 @@ try {
   $precoCongelado = $linhasApos.Count -eq 1 -and [int]$linhasApos[0].valor_unitario_centavos -eq 3000
 
   $aprovaD = Decidir-Pedido $reservaD.Json.pedido_id 'aprovar'
-  $depois = Evento-Atual
-  $lote1 = Lote-PorNome $depois.Json 'Primeiro lote'
-  $lote2 = Lote-PorNome $depois.Json 'Segundo lote'
+  $lote1 = Lote-Sqlite 'Primeiro lote'
+  $lote2 = Lote-Sqlite 'Segundo lote'
   $aprovados = Pedidos 'aprovado'
   $precos = @($telB, $telC, $telD) | ForEach-Object {
     $item = Pedido-DoTelefone $aprovados.Json.pedidos $_
@@ -453,12 +461,11 @@ try {
   $tardioOk = [int]$voltou.changes -eq 1 -and [int]$expirou.Json.expirados -ge 1 -and $pedidoF.status -eq 'expirado' -and $comprovanteF.Status -eq 201 -and [int]$pedidoTardio.recebido_apos_expirar -eq 1 -and [string]$pedidoTardio.observacoes -like ('*{0}*' -f $marcaTardia)
   Resultado 8 'Reserva vencida expira na expiracao manual; comprovante posterior fica em analise com a marca recebido apos expirar' $tardioOk $(if ($tardioOk) { '' } else { "status $($pedidoF.status) flag $($pedidoTardio.recebido_apos_expirar) obs $($pedidoTardio.observacoes)" })
 
-  $loteDepoisExpirar = Lote-PorNome (Evento-Atual).Json 'Primeiro lote'
+  $loteDepoisExpirar = Lote-Sqlite 'Primeiro lote'
   $cancelou = Enviar $telA 'cancelar'
   $recusou = Decidir-Pedido $reservaE.Json.pedido_id 'recusar'
-  $finalEvento = Evento-Atual
-  $lote1Final = Lote-PorNome $finalEvento.Json 'Primeiro lote'
-  $lote2Final = Lote-PorNome $finalEvento.Json 'Segundo lote'
+  $lote1Final = Lote-Sqlite 'Primeiro lote'
+  $lote2Final = Lote-Sqlite 'Segundo lote'
   $naoReabre = $loteDepoisExpirar.status -eq 'encerrado' -and $lote1Final.status -eq 'encerrado' -and [string]$lote1Final.encerrado_em -eq $marcoEncerrado -and [int]$lote1Final.quantidade_vendida -eq [int]$lote1.quantidade_vendida -and $lote2Final.status -eq 'disponivel' -and [int]$lote2Final.quantidade_vendida -eq 0 -and $cancelou.Json.estado -eq 'cancelado' -and $recusou.Status -eq 200
   Resultado 9 'Lote 1 nao reabre apos expirar, cancelar ou recusar' $naoReabre $(if ($naoReabre) { '' } else { "lote1 $($lote1Final.status) lote2 $($lote2Final.status) vendida $($lote1Final.quantidade_vendida) cancel $($cancelou.Json.estado) recusa $($recusou.Status)" })
 } catch {
