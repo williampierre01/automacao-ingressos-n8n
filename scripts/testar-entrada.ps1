@@ -1063,6 +1063,65 @@ server.listen(porta, "127.0.0.1");
     }
   }
 
+  Cenario 18 'limpeza inicial apaga execucoes que ja estavam marcadas' {
+    $bancoLimpo = Join-Path $tmp 'n8n-limpeza.sqlite'
+    $bancoIncompleto = Join-Path $tmp 'n8n-limpeza-incompleta.sqlite'
+    $arquivo = Join-Path $env:TEMP 'testar-entrada-limpeza.mjs'
+    $codigo = @'
+import { DatabaseSync } from "node:sqlite";
+function limpar(db) {
+  db.exec("PRAGMA busy_timeout = 5000");
+  for (const tabela of ["execution_data", "execution_metadata", "execution_entity"]) {
+    const achou = db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?").get(tabela);
+    if (!achou) {
+      throw new Error("Tabela " + tabela + " nao existe nesta versao do n8n.");
+    }
+  }
+  db.exec("DELETE FROM execution_data WHERE executionId IN (SELECT id FROM execution_entity WHERE deletedAt IS NOT NULL)");
+  db.exec("DELETE FROM execution_metadata WHERE executionId IN (SELECT id FROM execution_entity WHERE deletedAt IS NOT NULL)");
+  db.exec("DELETE FROM execution_entity WHERE deletedAt IS NOT NULL");
+}
+const db = new DatabaseSync(process.argv[2]);
+db.exec("CREATE TABLE execution_entity (id INTEGER PRIMARY KEY, workflowId TEXT, deletedAt TEXT)");
+db.exec("CREATE TABLE execution_data (executionId INTEGER, data TEXT, workflowData TEXT)");
+db.exec("CREATE TABLE execution_metadata (id INTEGER PRIMARY KEY, executionId INTEGER, key TEXT, value TEXT)");
+db.exec("INSERT INTO execution_entity (id, workflowId, deletedAt) VALUES (1, 'webhookWhatsapp0001', '2020-01-01 00:00:00'), (2, 'webhookWhatsapp0001', NULL)");
+db.exec("INSERT INTO execution_data (executionId, data, workflowData) VALUES (1, 'corpo-marcado', 'webhookWhatsapp0001'), (2, 'corpo-vivo', 'webhookWhatsapp0001')");
+db.exec("INSERT INTO execution_metadata (id, executionId, key, value) VALUES (1, 1, 'k', 'v'), (2, 2, 'k', 'v')");
+limpar(db);
+const entidade = db.prepare("SELECT id FROM execution_entity ORDER BY id").all().map((r) => String(r.id)).join(",");
+const dados = db.prepare("SELECT executionId FROM execution_data ORDER BY executionId").all().map((r) => String(r.executionId)).join(",");
+const meta = db.prepare("SELECT executionId FROM execution_metadata ORDER BY executionId").all().map((r) => String(r.executionId)).join(",");
+db.close();
+if (entidade !== "2" || dados !== "2" || meta !== "2") {
+  process.stdout.write("sobrou entidade=" + entidade + " dados=" + dados + " meta=" + meta);
+  process.exit(1);
+}
+const incompleto = new DatabaseSync(process.argv[3]);
+incompleto.exec("CREATE TABLE execution_entity (id INTEGER PRIMARY KEY, deletedAt TEXT)");
+incompleto.exec("CREATE TABLE execution_data (executionId INTEGER)");
+try {
+  limpar(incompleto);
+  process.stdout.write("nao falhou sem tabela");
+  process.exit(1);
+} catch (erro) {
+  if (!String(erro.message).includes("execution_metadata")) {
+    process.stdout.write("mensagem sem o nome da tabela");
+    process.exit(1);
+  }
+}
+incompleto.close();
+process.stdout.write("ok");
+'@
+    $utf8Limpeza = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($arquivo, $codigo, $utf8Limpeza)
+    $saidaLimpeza = & $script:node --no-warnings $arquivo $bancoLimpo $bancoIncompleto
+    if ($LASTEXITCODE -ne 0 -or (($saidaLimpeza | Out-String).Trim()) -ne 'ok') {
+      return ("limpeza " + (($saidaLimpeza | Out-String).Trim()))
+    }
+    return $true
+  }
+
   Cenario 16 'evento inexistente falha na hora e grava o codigo na fila' {
     Parar-Processo $script:apoio
     Iniciar-Gateway $script:webhookReal 'festa-inexistente'

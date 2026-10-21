@@ -68,7 +68,8 @@ New-Item -ItemType Directory -Force -Path $env:N8N_USER_FOLDER | Out-Null
 New-Item -ItemType Directory -Force -Path $env:npm_config_cache | Out-Null
 
 # n8n 2.34.6, com saveDataSuccessExecution=none, grava a execucao e so preenche deletedAt.
-# O corpo (cabecalho e mensagem) continuaria no banco. Este trigger apaga a linha.
+# O corpo (cabecalho e mensagem) continuaria no banco. A limpeza apaga o que ja
+# estava marcado; o trigger apaga a marcacao futura.
 $bancoN8n = Join-Path $env:N8N_USER_FOLDER '.n8n\database.sqlite'
 if (Test-Path -LiteralPath $bancoN8n) {
     $garantirTrigger = Join-Path $env:TEMP 'n8n-garantir-trigger.mjs'
@@ -77,6 +78,15 @@ if (Test-Path -LiteralPath $bancoN8n) {
 import { DatabaseSync } from "node:sqlite";
 const db = new DatabaseSync(process.argv[2]);
 db.exec("PRAGMA busy_timeout = 5000");
+for (const tabela of ["execution_data", "execution_metadata", "execution_entity"]) {
+  const achou = db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?").get(tabela);
+  if (!achou) {
+    throw new Error("Tabela " + tabela + " nao existe nesta versao do n8n.");
+  }
+}
+db.exec("DELETE FROM execution_data WHERE executionId IN (SELECT id FROM execution_entity WHERE deletedAt IS NOT NULL)");
+db.exec("DELETE FROM execution_metadata WHERE executionId IN (SELECT id FROM execution_entity WHERE deletedAt IS NOT NULL)");
+db.exec("DELETE FROM execution_entity WHERE deletedAt IS NOT NULL");
 db.exec("DROP TRIGGER IF EXISTS limpar_execucao_apagada");
 db.exec(`
 CREATE TRIGGER limpar_execucao_apagada
