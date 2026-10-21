@@ -69,7 +69,7 @@ O script abre uma janela para o n8n e outra para a API. As janelas devem permane
 
 O arquivo `.env`, as credenciais, o banco SQLite e os dados recebidos nunca devem ser enviados ao GitHub.
 
-O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN` no processo. O fluxo pede para nao gravar execucao bem-sucedida. O n8n 2.34.6 ainda cria a linha e o corpo e so marca `deletedAt`; o script apaga essa linha ao subir, para o cabecalho e a mensagem nao permanecerem. Execucao com erro nao recebe essa marca e pode reter dados por ate 72 horas (`EXECUTIONS_DATA_MAX_AGE=72`); depois disso a poda apaga.
+O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN` no processo. O fluxo pede para nao gravar execucao bem-sucedida nem execucao com erro (`saveDataSuccessExecution=none`, `saveDataErrorExecution=none`). O n8n 2.34.6 ainda cria a linha de sucesso e o corpo e so marca `deletedAt`; o script apaga essa linha ao subir, para o cabecalho e a mensagem nao permanecerem. Nao foi possivel provocar uma execucao com status de erro neste fluxo: falha da API cai no ramo tratado do no HTTP, e JSON invalido ou gzip falham antes de existir linha. Por isso nao ficou provado se uma execucao com erro seria apagada na hora. `EXECUTIONS_DATA_PRUNE=true` e `EXECUTIONS_DATA_MAX_AGE=72` continuam como rede de seguranca.
 
 Para importar e publicar o fluxo 04 sem a interface:
 

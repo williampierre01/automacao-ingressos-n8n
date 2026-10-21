@@ -381,6 +381,24 @@ function Invoke-Webhook([string]$Body, [string]$Authorization) {
   return Ler-Http $req
 }
 
+function Setting-ErroN8n {
+  $arquivo = Join-Path $env:TEMP 'testar-entrada-n8n-setting.mjs'
+  $codigo = @'
+import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const linha = db.prepare("SELECT settings FROM workflow_entity WHERE id = ?").get("webhookWhatsapp0001");
+const texto = linha && linha.settings != null ? String(linha.settings).replace(/\s+/g, "") : "";
+process.stdout.write(texto.includes('"saveDataErrorExecution":"none"') ? "sim" : "nao");
+db.close();
+'@
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($arquivo, $codigo, $utf8)
+  $caminho = Join-Path $raiz 'work\n8n-user\.n8n\database.sqlite'
+  $saida = & $script:node --no-warnings $arquivo $caminho
+  if ($LASTEXITCODE -ne 0) { throw 'consulta do setting do fluxo 04 falhou' }
+  return ($saida | Out-String).Trim()
+}
+
 function Contar-ExecucoesN8n {
   $arquivo = Join-Path $env:TEMP 'testar-entrada-n8n-exec.mjs'
   $codigo = @'
@@ -419,6 +437,10 @@ function Pid-Ouvindo([int]$alvo) {
 
 function Variavel-Definida([int]$pidAlvo, [string]$nome) {
   return [EntradaProbeAmbiente]::Definida($pidAlvo, $nome)
+}
+
+function Variavel-Igual([int]$pidAlvo, [string]$nome, [string]$esperado) {
+  return [EntradaProbeAmbiente]::Igual($pidAlvo, $nome, $esperado)
 }
 
 function Apagar-PastaTemporaria {
@@ -480,7 +502,7 @@ public static class EntradaProbeAmbiente {
         return IntPtr.Size == 8 ? (IntPtr)BitConverter.ToInt64(buffer, 0) : (IntPtr)BitConverter.ToInt32(buffer, 0);
     }
 
-    public static bool Definida(int pid, string name) {
+    static bool Alguma(int pid, Func<string, bool> predicado) {
         IntPtr handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
         if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
@@ -500,19 +522,28 @@ public static class EntradaProbeAmbiente {
             int count = (int)read.ToInt64();
             if ((count % 2) == 1) count -= 1;
             string text = Encoding.Unicode.GetString(block, 0, count);
-            string prefix = name + "=";
             int index = 0;
             while (index < text.Length) {
                 int end = text.IndexOf('\0', index);
                 if (end < 0 || end == index) break;
                 string entry = text.Substring(index, end - index);
-                if (entry.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && entry.Length > prefix.Length) return true;
+                if (predicado(entry)) return true;
                 index = end + 1;
             }
             return false;
         } finally {
             CloseHandle(handle);
         }
+    }
+
+    public static bool Definida(int pid, string name) {
+        string prefix = name + "=";
+        return Alguma(pid, entry => entry.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && entry.Length > prefix.Length);
+    }
+
+    public static bool Igual(int pid, string name, string expected) {
+        string alvo = name + "=" + expected;
+        return Alguma(pid, entry => entry.Equals(alvo, StringComparison.Ordinal));
     }
 }
 '@
@@ -732,6 +763,13 @@ server.listen(porta, "127.0.0.1");
   Start-Sleep -Milliseconds 800
   $execucoesDepois = Contar-ExecucoesN8n
   Resultado 11 'mensagem bem-sucedida nao grava execucao no n8n' ($execucoesDepois -eq $execucoesAntes) "contagem $execucoesAntes -> $execucoesDepois"
+
+  Cenario 17 'o processo e o fluxo publicado pedem para nao gravar execucao com erro' {
+    $envOk = Variavel-Igual $pidN8n 'EXECUTIONS_DATA_SAVE_ON_ERROR' 'none'
+    $settingOk = (Setting-ErroN8n) -eq 'sim'
+    if ($envOk -and $settingOk) { return $true }
+    return "env=$envOk setting=$settingOk"
+  }
 
   $deNovo = Invoke-Api -Method 'POST' -Path '/simular-mensagem' -Body $corpo
   $contagem = Contar-Conversas '11955554444'
