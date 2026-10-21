@@ -35,7 +35,7 @@ const adminPath = join(projectRoot, 'web', 'admin.html');
 const schemaPath = join(apiFolder, 'schema.sql');
 const host = process.env.API_HOST || '127.0.0.1';
 const port = Number(process.env.API_PORT || 8000);
-const httpsHost = process.env.API_HTTPS_HOST || '0.0.0.0';
+const httpsHost = process.env.API_HTTPS_HOST || '127.0.0.1';
 const httpsPort = Number(process.env.API_HTTPS_PORT || 8443);
 const tlsCertificatePath = process.env.API_TLS_CERT_PATH || '';
 const tlsKeyPath = process.env.API_TLS_KEY_PATH || '';
@@ -188,6 +188,11 @@ const checkInParticipantStatement = database.prepare(`
   WHERE pt.id = ? AND pt.evento_id = ? AND p.status_pagamento = 'aprovado'
 `);
 
+function rotaHttpsFechada(method, pathname) {
+  if (pathname === '/interno' || pathname.startsWith('/interno/')) return true;
+  return method === 'POST' && pathname === '/atendimentos';
+}
+
 function requiresAdmin(method, pathname) {
   if (pathname.startsWith('/admin/')) return true;
   return method === 'GET' && (pathname === '/atendimentos' || pathname === '/exportar');
@@ -309,6 +314,11 @@ const requestListener = async (request, response) => {
   });
 
   const url = new URL(request.url || '/', `http://${request.headers.host || `${host}:${port}`}`);
+
+  if (request.socket?.encrypted && rotaHttpsFechada(request.method, url.pathname)) {
+    sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+    return;
+  }
 
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
