@@ -40,6 +40,9 @@ test('segredo vazio ou curto impede a inicializacao', () => {
   assert.throws(() => requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: 'a'.repeat(23) }), /pelo menos 24 caracteres/);
   assert.equal(requireSecret('ADMIN_TOKEN', { ADMIN_TOKEN: ` ${adminToken} ` }), adminToken);
   assert.equal(requireSecret('META_APP_SECRET', { META_APP_SECRET: 'abc' }), 'abc');
+  assert.throws(() => requireSecret('API_INTERNAL_TOKEN', {}), /API_INTERNAL_TOKEN nao definido/);
+  assert.throws(() => requireSecret('API_INTERNAL_TOKEN', { API_INTERNAL_TOKEN: 'a'.repeat(23) }), /pelo menos 24 caracteres/);
+  assert.equal(requireSecret('API_INTERNAL_TOKEN', { API_INTERNAL_TOKEN: adminToken }), adminToken);
 });
 
 test('rotas protegidas respondem 401 ou 200', async () => {

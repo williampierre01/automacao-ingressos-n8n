@@ -18,56 +18,83 @@
     },
     {
       "parameters": {
-        "jsCode": "const entrada = $input.first().json;\nconst body = entrada.body ?? entrada;\nconst valor = body.entry?.[0]?.changes?.[0]?.value ?? {};\nconst contato = valor.contacts?.[0] ?? {};\nconst mensagemWhatsApp = valor.messages?.[0] ?? {};\n\nconst telefone = body.telefone ?? mensagemWhatsApp.from ?? '';\nconst nome = body.nome ?? contato.profile?.name ?? telefone ?? 'Sem nome';\nconst mensagem = body.mensagem\n  ?? mensagemWhatsApp.text?.body\n  ?? mensagemWhatsApp.button?.text\n  ?? mensagemWhatsApp.interactive?.button_reply?.title\n  ?? mensagemWhatsApp.interactive?.list_reply?.title\n  ?? '';\n\nif (!telefone || !mensagem) {\n  throw new Error('O webhook precisa receber telefone e mensagem.');\n}\n\nconst timestamp = mensagemWhatsApp.timestamp\n  ? new Date(Number(mensagemWhatsApp.timestamp) * 1000).toISOString()\n  : new Date().toISOString();\n\nreturn [{\n  json: {\n    data_hora: timestamp,\n    telefone: String(telefone),\n    nome: String(nome),\n    mensagem: String(mensagem),\n    origem: body.entry ? 'whatsapp_cloud_api' : 'webhook_simulado',\n    status: 'recebido',\n    resposta: `Ola, ${nome}! Sua mensagem foi recebida.`,\n    id_mensagem: body.id_mensagem ?? mensagemWhatsApp.id\n  }\n}];"
-      },
-      "id": "102081b9-2249-4f21-8613-49e1af3e5eed",
-      "name": "Interpretar mensagem",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [-160, 0]
-    },
-    {
-      "parameters": {
         "method": "POST",
-        "url": "http://127.0.0.1:8000/atendimentos",
+        "url": "={{ 'http://127.0.0.1:' + (/^\\d+$/.test(String(($json.body || {}).porta_api || '')) ? String($json.body.porta_api) : '8000') + '/interno/mensagem' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.headers.authorization || '' }}"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
-        "options": {}
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "5431bc11-7ec5-4667-8fbb-7fe27fe04ed5",
-      "name": "Salvar na API local",
+      "name": "Chamar API interna",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [120, 0]
+      "position": [-120, 0],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { recebido: true, salvo: $json.salvo, id: $json.id } }}",
-        "options": {}
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ Number($json.statusCode) || 502 }}"
+        }
       },
       "id": "31a8f8bf-51f8-4094-a87e-b2ebad3977b1",
-      "name": "Confirmar recebimento",
+      "name": "Devolver resposta",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
-      "position": [400, 0]
+      "position": [200, -80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { erro: 'O n8n nao conseguiu falar com a API.' } }}",
+        "options": {
+          "responseCode": 502
+        }
+      },
+      "id": "a1c0e5d2-6b47-4f0a-9c31-0e5d4a7b8c90",
+      "name": "Devolver erro de rede",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [200, 120]
     }
   ],
   "connections": {
     "Receber mensagem externa": {
-      "main": [[{"node": "Interpretar mensagem", "type": "main", "index": 0}]]
+      "main": [[{ "node": "Chamar API interna", "type": "main", "index": 0 }]]
     },
-    "Interpretar mensagem": {
-      "main": [[{"node": "Salvar na API local", "type": "main", "index": 0}]]
-    },
-    "Salvar na API local": {
-      "main": [[{"node": "Confirmar recebimento", "type": "main", "index": 0}]]
+    "Chamar API interna": {
+      "main": [
+        [{ "node": "Devolver resposta", "type": "main", "index": 0 }],
+        [{ "node": "Devolver erro de rede", "type": "main", "index": 0 }]
+      ]
     }
   },
   "pinData": {},
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
   },
   "active": false,
   "tags": []

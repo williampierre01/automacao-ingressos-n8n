@@ -105,15 +105,29 @@ function iso(agora) {
   return (agora instanceof Date ? agora : new Date(agora)).toISOString();
 }
 
-function emTransacao(database, trabalho) {
-  database.exec('BEGIN IMMEDIATE');
+const profundidadeTransacao = new WeakMap();
+
+export function emTransacao(database, trabalho) {
+  const nivel = profundidadeTransacao.get(database) || 0;
+  const ponto = `nivel_${nivel}`;
+  if (nivel === 0) database.exec('BEGIN IMMEDIATE');
+  else database.exec(`SAVEPOINT ${ponto}`);
+  profundidadeTransacao.set(database, nivel + 1);
   try {
     const resultado = trabalho();
-    database.exec('COMMIT');
+    if (nivel === 0) database.exec('COMMIT');
+    else database.exec(`RELEASE SAVEPOINT ${ponto}`);
     return resultado;
   } catch (error) {
-    try { database.exec('ROLLBACK'); } catch { /* a transacao ja foi desfeita */ }
+    if (nivel === 0) {
+      try { database.exec('ROLLBACK'); } catch { /* a transacao ja foi desfeita */ }
+    } else {
+      try { database.exec(`ROLLBACK TO SAVEPOINT ${ponto}`); } catch { /* a transacao ja foi desfeita */ }
+      try { database.exec(`RELEASE SAVEPOINT ${ponto}`); } catch { /* o savepoint ja foi liberado */ }
+    }
     throw error;
+  } finally {
+    profundidadeTransacao.set(database, nivel);
   }
 }
 
@@ -623,33 +637,92 @@ function adicionarColunas(database) {
   database.exec('CREATE INDEX IF NOT EXISTS idx_viradas_pendentes ON viradas_lote(anunciada_em, id)');
 }
 
+function versaoBanco(database) {
+  return Number(database.prepare('PRAGMA user_version').get().user_version);
+}
+
+function criarTabelasEntrada(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS mensagens_entrada (
+      wamid TEXT PRIMARY KEY,
+      telefone TEXT NOT NULL,
+      nome TEXT NOT NULL DEFAULT '',
+      tipo TEXT NOT NULL,
+      texto TEXT NOT NULL DEFAULT '',
+      recebida_em TEXT NOT NULL,
+      origem TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mensagens_saida (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wamid TEXT NOT NULL REFERENCES mensagens_entrada(wamid),
+      texto TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pendente_envio',
+      criada_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS fila_webhook (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wamid TEXT NOT NULL UNIQUE,
+      telefone TEXT NOT NULL,
+      nome TEXT NOT NULL DEFAULT '',
+      tipo TEXT NOT NULL,
+      texto TEXT NOT NULL DEFAULT '',
+      timestamp_mensagem TEXT NOT NULL,
+      origem TEXT NOT NULL,
+      evento_codigo TEXT NOT NULL DEFAULT '',
+      corpo TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK (status IN ('pendente', 'processando', 'entregue', 'falhou')),
+      tentativas INTEGER NOT NULL DEFAULT 0,
+      proxima_tentativa_em TEXT NOT NULL,
+      ultimo_erro TEXT NOT NULL DEFAULT '',
+      criado_em TEXT NOT NULL,
+      atualizado_em TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mensagens_saida_wamid ON mensagens_saida(wamid);
+    CREATE INDEX IF NOT EXISTS idx_fila_telefone_status ON fila_webhook(telefone, status, id);
+  `);
+}
+
 export function migrar(database, { databasePath, agora = new Date(), falharCopia = false } = {}) {
   database.exec('PRAGMA busy_timeout = 5000');
-  const versao = Number(database.prepare('PRAGMA user_version').get().user_version);
-  if (versao >= 1) return { migrado: false, backup: null };
+  const versao = versaoBanco(database);
+  if (versao >= 2) return { migrado: false, backup: null };
+  let backup = null;
+  let migrado = false;
+  if (versao < 1) {
+    if (!databasePath) {
+      throw new Error('Migracao abortada: caminho do banco ausente para o backup.');
+    }
+    backup = backupBanco(database, databasePath, agora);
+    const recriar = participantesExigeDocumento(database);
 
-  if (!databasePath) {
-    throw new Error('Migracao abortada: caminho do banco ausente para o backup.');
+    if (recriar) database.exec('PRAGMA foreign_keys = OFF');
+    try {
+      emTransacao(database, () => {
+        adicionarColunas(database);
+        if (recriar) recriarParticipantes(database, { falharCopia });
+        normalizarTelefones(database);
+        database.exec('PRAGMA user_version = 1');
+      });
+    } catch (error) {
+      const texto = String(error.message || error);
+      const mensagem = texto.startsWith('Migracao abortada') ? texto : `Migracao abortada: ${texto}`;
+      throw new Error(backup ? `${mensagem} Backup em ${backup}.` : mensagem);
+    } finally {
+      database.exec('PRAGMA foreign_keys = ON');
+    }
+    migrado = true;
   }
-  const backup = backupBanco(database, databasePath, agora);
-  const recriar = participantesExigeDocumento(database);
-
-  if (recriar) database.exec('PRAGMA foreign_keys = OFF');
-  try {
+  if (versaoBanco(database) < 2) {
     emTransacao(database, () => {
-      adicionarColunas(database);
-      if (recriar) recriarParticipantes(database, { falharCopia });
-      normalizarTelefones(database);
-      database.exec('PRAGMA user_version = 1');
+      criarTabelasEntrada(database);
+      database.exec('PRAGMA user_version = 2');
     });
-  } catch (error) {
-    const texto = String(error.message || error);
-    const mensagem = texto.startsWith('Migracao abortada') ? texto : `Migracao abortada: ${texto}`;
-    throw new Error(backup ? `${mensagem} Backup em ${backup}.` : mensagem);
-  } finally {
-    database.exec('PRAGMA foreign_keys = ON');
+    migrado = true;
   }
-  return { migrado: true, backup };
+  return { migrado, backup };
 }
 
 export function garantirEventoDemonstracao(database, agora = new Date()) {

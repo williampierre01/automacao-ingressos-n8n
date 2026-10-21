@@ -112,6 +112,14 @@
     </section>
 
     <section class="card">
+      <h2>Fila do WhatsApp</h2>
+      <p>Eventos que esgotaram as tentativas. O corpo bruto some depois do prazo de retenção.</p>
+      <p id="queue-summary"></p>
+      <p id="queue-alert" class="badge" hidden></p>
+      <div id="queue-list">Carregando…</div>
+    </section>
+
+    <section class="card">
       <h2>Check-in na entrada</h2>
       <form id="check-in-form">
         <label>Evento<select name="evento" id="check-in-event-select" required></select></label>
@@ -207,6 +215,60 @@
       eventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
       checkInEventSelect.innerHTML = eventos.map((event) => `<option value="${escapeHtml(event.codigo)}">${escapeHtml(event.nome)}</option>`).join('');
     }
+
+    async function refreshQueue() {
+      const response = await adminFetch('/admin/whatsapp/fila');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.erro);
+      const itens = result.itens || [];
+      const pendentes = Number(result.pendentes || 0);
+      const processando = Number(result.processando || 0);
+      const idade = result.idade_pendente_mais_antigo_segundos;
+      document.querySelector('#queue-summary').textContent = `${pendentes} pendente(s), ${processando} processando.`;
+      const alerta = document.querySelector('#queue-alert');
+      if (idade !== null && idade !== undefined && Number(idade) > 300) {
+        alerta.hidden = false;
+        alerta.textContent = `Ha um item pendente ha ${Number(idade)} segundos.`;
+      } else {
+        alerta.hidden = true;
+        alerta.textContent = '';
+      }
+      queueList.innerHTML = itens.map((item) => `
+        <article class="event">
+          <strong>${escapeHtml(item.tipo)} · ${escapeHtml(item.telefone)}</strong>
+          <span>${escapeHtml(new Date(item.atualizado_em).toLocaleString('pt-BR'))} · ${item.tentativas} tentativas</span>
+          <span>${escapeHtml(item.ultimo_erro || 'sem detalhe')}${Number(item.tem_corpo) === 1 ? '' : ' · corpo expirado'}</span>
+          <div class="event-actions">
+            <button type="button" data-reenfileirar="${item.id}" ${Number(item.tem_corpo) === 1 ? '' : 'disabled'}>Reenfileirar</button>
+          </div>
+        </article>
+      `).join('') || 'Nenhuma entrega esgotada.';
+    }
+
+    const queueList = document.querySelector('#queue-list');
+    queueList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-reenfileirar]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const base = `/admin/whatsapp/fila/${button.dataset.reenfileirar}/reenfileirar`;
+        let response = await adminFetch(base, { method: 'POST' });
+        let result = await response.json();
+        if (result.exige_confirmacao) {
+          if (!window.confirm(result.erro || 'Confirme para reenfileirar.')) {
+            button.disabled = false;
+            return;
+          }
+          response = await adminFetch(`${base}?confirmar=1`, { method: 'POST' });
+          result = await response.json();
+        }
+        if (!response.ok) throw new Error(result.erro);
+        await refreshQueue();
+      } catch (error) {
+        alert(error.message);
+        button.disabled = false;
+      }
+    });
 
     async function refreshViradas() {
       const response = await adminFetch('/admin/viradas');
@@ -388,6 +450,7 @@
     refreshEvents().catch(() => { eventList.textContent = 'Não foi possível carregar os eventos.'; });
     refreshPayments().catch((error) => { paymentList.textContent = error.message; });
     refreshViradas().catch((error) => { lotAlert.hidden = false; lotAlertList.textContent = error.message; });
+    refreshQueue().catch((error) => { queueList.textContent = error.message; });
   </script>
 </body>
 </html>

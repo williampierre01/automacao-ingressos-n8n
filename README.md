@@ -69,6 +69,16 @@ O script abre uma janela para o n8n e outra para a API. As janelas devem permane
 
 O arquivo `.env`, as credenciais, o banco SQLite e os dados recebidos nunca devem ser enviados ao GitHub.
 
+O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN` no processo. O fluxo pede para nao gravar execucao bem-sucedida nem execucao com erro (`saveDataSuccessExecution=none`, `saveDataErrorExecution=none`). O n8n 2.34.6 ainda cria a linha de sucesso e o corpo e so marca `deletedAt`; o script apaga essa linha ao subir e, em cada inicializacao, apaga as que ja estavam marcadas, para o cabecalho e a mensagem nao permanecerem. Nao foi possivel provocar uma execucao com status de erro neste fluxo: falha da API cai no ramo tratado do no HTTP, e JSON invalido ou gzip falham antes de existir linha. Por isso nao ficou provado se uma execucao com erro seria apagada na hora. `EXECUTIONS_DATA_PRUNE=true` e `EXECUTIONS_DATA_MAX_AGE=72` continuam como rede de seguranca.
+
+Para importar e publicar o fluxo 04 sem a interface:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publicar-fluxo-04.ps1
+```
+
+O comando usa `n8n import:workflow --input=workflows/04-webhook-whatsapp-simulado.json` e `n8n publish:workflow --id=webhookWhatsapp0001`. Se a porta 5678 estiver em uso, o script aborta. Feche o n8n, publique e abra de novo.
+
 ## HTTPS na rede local
 
 O projeto pode manter o HTTP interno em `127.0.0.1:8000` para o n8n e abrir, ao mesmo tempo, HTTPS na porta `8443` para celulares da mesma rede. A configuracao usa o mkcert somente para desenvolvimento local.
@@ -104,7 +114,7 @@ O fluxo `03 - Formulario local de atendimento` permite informar nome, telefone e
 
 ## Simulador de conversa
 
-Com a API e o n8n ativos, abra `http://127.0.0.1:8000/simulador`. A tela envia nome, telefone e mensagem ao webhook do fluxo 04, que processa e grava o atendimento na API local. Assim, todo o caminho da automacao pode ser testado sem uma conta da Meta.
+Com `SIMULADOR_ATIVO=1`, a API e o n8n ativos, abra `http://127.0.0.1:8000/simulador`. A tela envia nome, telefone e mensagem ao webhook do fluxo 04. O fluxo chama `POST /interno/mensagem`, que conduz a venda. Assim o simulador e o WhatsApp usam o mesmo caminho.
 
 ## Administracao de eventos
 

@@ -165,3 +165,43 @@ CREATE TABLE IF NOT EXISTS viradas_lote (
 );
 
 CREATE INDEX IF NOT EXISTS idx_viradas_pendentes ON viradas_lote(anunciada_em, id);
+
+CREATE TABLE IF NOT EXISTS mensagens_entrada (
+  wamid TEXT PRIMARY KEY,
+  telefone TEXT NOT NULL,
+  nome TEXT NOT NULL DEFAULT '',
+  tipo TEXT NOT NULL,
+  texto TEXT NOT NULL DEFAULT '',
+  recebida_em TEXT NOT NULL,
+  origem TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mensagens_saida (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wamid TEXT NOT NULL REFERENCES mensagens_entrada(wamid),
+  texto TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pendente_envio',
+  criada_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fila_webhook (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wamid TEXT NOT NULL UNIQUE,
+  telefone TEXT NOT NULL,
+  nome TEXT NOT NULL DEFAULT '',
+  tipo TEXT NOT NULL,
+  texto TEXT NOT NULL DEFAULT '',
+  timestamp_mensagem TEXT NOT NULL,
+  origem TEXT NOT NULL,
+  evento_codigo TEXT NOT NULL DEFAULT '',
+  corpo TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('pendente', 'processando', 'entregue', 'falhou')),
+  tentativas INTEGER NOT NULL DEFAULT 0,
+  proxima_tentativa_em TEXT NOT NULL,
+  ultimo_erro TEXT NOT NULL DEFAULT '',
+  criado_em TEXT NOT NULL,
+  atualizado_em TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mensagens_saida_wamid ON mensagens_saida(wamid);
+CREATE INDEX IF NOT EXISTS idx_fila_telefone_status ON fila_webhook(telefone, status, id);

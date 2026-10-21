@@ -17,6 +17,7 @@ import {
   aprovarPagamento,
   cancelarPedidoPendente,
   digitosTelefone,
+  emTransacao,
   expirarReservas,
   garantirEventoDemonstracao,
   listarViradasPendentes,
@@ -268,6 +269,29 @@ function executarNoWorker(dados) {
   });
 }
 
+test('emTransacao reentrante desfaz so o savepoint interno', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec('CREATE TABLE itens (nome TEXT PRIMARY KEY)');
+  emTransacao(database, () => {
+    database.prepare('INSERT INTO itens (nome) VALUES (?)').run('externo');
+    assert.throws(() => emTransacao(database, () => {
+      database.prepare('INSERT INTO itens (nome) VALUES (?)').run('interno');
+      throw new Error('falha interna');
+    }), /falha interna/);
+    assert.deepEqual(database.prepare('SELECT nome FROM itens ORDER BY nome').all().map((row) => row.nome), ['externo']);
+  });
+  assert.deepEqual(database.prepare('SELECT nome FROM itens').all().map((row) => row.nome), ['externo']);
+  assert.throws(() => emTransacao(database, () => {
+    database.prepare('INSERT INTO itens (nome) VALUES (?)').run('junto');
+    emTransacao(database, () => {
+      database.prepare('INSERT INTO itens (nome) VALUES (?)').run('aninhado');
+    });
+    throw new Error('falha externa');
+  }), /falha externa/);
+  assert.equal(database.prepare(`SELECT nome FROM itens WHERE nome IN ('junto', 'aninhado')`).all().length, 0);
+  database.close();
+});
+
 test('total arredonda meio centavo para cima e desconto zero permanece exato', () => {
   assert.equal(totalCentavos(3333, 1, 10), 3000);
   assert.equal(totalCentavos(3334, 1, 10), 3001);
@@ -358,7 +382,7 @@ test('migracao de banco populado preserva linhas, aceita documento vazio e e ide
     assert.equal(entrou.numero_documento, '12345678901');
     assert.equal(database.prepare(`SELECT comprador_telefone FROM pedidos WHERE id = ?`).get(pedidoId).comprador_telefone, '11988887777');
     assert.equal(database.prepare('SELECT telefone FROM conversas').get().telefone, '11988887777');
-    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 1);
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 2);
     database.prepare(`
       INSERT INTO participantes (pedido_id, evento_id, nome_completo, status_ingresso, criado_em, atualizado_em)
       VALUES (?, ?, 'Sem documento', 'pendente', ?, ?)
@@ -428,7 +452,7 @@ test('migracao da versao 0 grava backup mesmo sem recriar participantes', async 
     const sql = backup.prepare(`SELECT sql FROM sqlite_master WHERE name = 'participantes'`).get().sql;
     assert.doesNotMatch(sql, /tipo_documento TEXT NOT NULL/i);
     backup.close();
-    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 1);
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 2);
     assert.equal(migrar(database, { databasePath: caminho }).backup, null);
     database.close();
   } finally {
@@ -1051,6 +1075,7 @@ async function startApi(extraEnv) {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
       ADMIN_TOKEN: adminToken,
+      API_INTERNAL_TOKEN: adminToken,
       API_HOST: '127.0.0.1',
       API_PORT: String(port),
       API_DATABASE_PATH: databasePath,

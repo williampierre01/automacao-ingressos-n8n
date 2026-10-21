@@ -18,6 +18,7 @@ async function startApi(extraEnv) {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
       ADMIN_TOKEN: adminToken,
+      API_INTERNAL_TOKEN: adminToken,
       API_HOST: '127.0.0.1',
       API_PORT: String(port),
       API_DATABASE_PATH: join(directory, 'teste.sqlite'),
