@@ -54,7 +54,7 @@ foreach ($nome in $chavesDoArquivo) {
   }
 }
 
-foreach ($nome in @('ADMIN_TOKEN', 'META_APP_SECRET', 'API_INTERNAL_TOKEN', 'N8N_BLOCK_ENV_ACCESS_IN_NODE')) {
+foreach ($nome in @('ADMIN_TOKEN', 'META_APP_SECRET', 'API_INTERNAL_TOKEN', 'N8N_BLOCK_ENV_ACCESS_IN_NODE', 'META_ACCESS_TOKEN')) {
   [Environment]::SetEnvironmentVariable($nome, $null, 'Process')
 }
 

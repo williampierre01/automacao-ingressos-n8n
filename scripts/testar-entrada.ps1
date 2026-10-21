@@ -27,7 +27,7 @@ $node = $null
 function Texto-Seguro([string]$texto) {
   if (-not $texto) { return '' }
   $limpo = [regex]::Replace($texto, '(?i)bearer\s+\S+', 'bearer [omitido]')
-  $limpo = [regex]::Replace($limpo, '(?i)(api_internal_token|admin_token|meta_app_secret)\s*[=:]\s*\S+', '$1=[omitido]')
+  $limpo = [regex]::Replace($limpo, '(?i)(api_internal_token|admin_token|meta_app_secret|meta_access_token)\s*[=:]\s*\S+', '$1=[omitido]')
   $limpo = [regex]::Replace($limpo, '(?i)sha256=[0-9a-f]+', 'sha256=[omitido]')
   foreach ($segredo in @($script:adminToken, $script:internalToken, $script:metaSecret)) {
     if ($segredo -and $segredo.Length -ge 8) { $limpo = $limpo.Replace($segredo, '[omitido]') }
@@ -515,14 +515,24 @@ public static class EntradaProbeAmbiente {
             IntPtr parameters = ReadPtr(handle, info.PebBaseAddress + parametersOffset);
             int environmentOffset = IntPtr.Size == 8 ? 0x80 : 0x48;
             IntPtr environment = ReadPtr(handle, parameters + environmentOffset);
-            var block = new byte[128 * 1024];
-            IntPtr read;
-            if (!ReadProcessMemory(handle, environment, block, block.Length, out read) || read.ToInt64() < 4) {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+            var block = new System.Collections.Generic.List<byte>();
+            int offset = 0;
+            while (offset < 256 * 1024) {
+                byte[] chunk = new byte[4096];
+                IntPtr read;
+                IntPtr address = new IntPtr(environment.ToInt64() + offset);
+                bool ok = ReadProcessMemory(handle, address, chunk, chunk.Length, out read);
+                int n = read.ToInt64() > 0 ? (int)read.ToInt64() : 0;
+                for (int i = 0; i < n; i++) block.Add(chunk[i]);
+                offset += n;
+                if (!ok || n < chunk.Length) break;
+                if (block.Count >= 4 && block[block.Count - 1] == 0 && block[block.Count - 2] == 0 && block[block.Count - 3] == 0 && block[block.Count - 4] == 0) break;
             }
-            int count = (int)read.ToInt64();
+            if (block.Count < 4) throw new Win32Exception(Marshal.GetLastWin32Error());
+            byte[] bytes = block.ToArray();
+            int count = bytes.Length;
             if ((count % 2) == 1) count -= 1;
-            string text = Encoding.Unicode.GetString(block, 0, count);
+            string text = Encoding.Unicode.GetString(bytes, 0, count);
             int index = 0;
             while (index < text.Length) {
                 int end = text.IndexOf('\0', index);
@@ -581,11 +591,13 @@ try {
   $temInterno = $true
   $temAdmin = $true
   $temMeta = $true
+  $temAcesso = $true
   $temBloco = $true
   if ($pidN8n -gt 0) {
     $temInterno = Variavel-Definida $pidN8n 'API_INTERNAL_TOKEN'
     $temAdmin = Variavel-Definida $pidN8n 'ADMIN_TOKEN'
     $temMeta = Variavel-Definida $pidN8n 'META_APP_SECRET'
+    $temAcesso = Variavel-Definida $pidN8n 'META_ACCESS_TOKEN'
     $temBloco = Variavel-Definida $pidN8n 'N8N_BLOCK_ENV_ACCESS_IN_NODE'
   }
   $enderecos = Enderecos-Escuta 5678
@@ -593,12 +605,12 @@ try {
   foreach ($endereco in $enderecos) {
     if ([string]$endereco -ne '127.0.0.1') { $soLocal = $false }
   }
-  if ($nomeN8n -ne 'node' -or $temInterno -or $temAdmin -or $temMeta -or $temBloco -or -not $soLocal) {
+  if ($nomeN8n -ne 'node' -or $temInterno -or $temAdmin -or $temMeta -or $temAcesso -or $temBloco -or -not $soLocal) {
     $listaEnderecos = ($enderecos -join ',')
-    Write-Output ("FALHOU ambiente. API_INTERNAL_TOKEN={0} ADMIN_TOKEN={1} META_APP_SECRET={2} BLOCK_ENV={3} escuta={4} processo={5} (reinicie com scripts/iniciar-n8n.ps1)" -f $temInterno, $temAdmin, $temMeta, $temBloco, $listaEnderecos, $nomeN8n)
+    Write-Output ("FALHOU ambiente. API_INTERNAL_TOKEN={0} ADMIN_TOKEN={1} META_APP_SECRET={2} META_ACCESS_TOKEN={3} BLOCK_ENV={4} escuta={5} processo={6} (reinicie com scripts/iniciar-n8n.ps1)" -f $temInterno, $temAdmin, $temMeta, $temAcesso, $temBloco, $listaEnderecos, $nomeN8n)
     exit 1
   }
-  Write-Output 'OK ambiente. o n8n escuta so em 127.0.0.1 e nao tem API_INTERNAL_TOKEN, ADMIN_TOKEN nem META_APP_SECRET'
+  Write-Output 'OK ambiente. o n8n escuta so em 127.0.0.1 e nao tem API_INTERNAL_TOKEN, ADMIN_TOKEN, META_APP_SECRET nem META_ACCESS_TOKEN'
 
   $portatil = Join-Path $raiz 'work\runtime\node_modules\node\bin\node.exe'
   if (Test-Path -LiteralPath $portatil) { $node = $portatil } else { $node = 'node' }

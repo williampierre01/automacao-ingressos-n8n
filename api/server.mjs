@@ -1,7 +1,7 @@
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -32,7 +32,9 @@ import {
 const apiFolder = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(apiFolder);
 const dataFolder = join(projectRoot, 'data');
-const receiptsFolder = join(dataFolder, 'comprovantes');
+const receiptsFolder = process.env.COMPROVANTES_DIR
+  ? resolve(process.env.COMPROVANTES_DIR)
+  : join(dataFolder, 'comprovantes');
 const databasePath = process.env.API_DATABASE_PATH || join(dataFolder, 'atendimentos.sqlite');
 const simulatorPath = join(projectRoot, 'web', 'simulador.html');
 const adminPath = join(projectRoot, 'web', 'admin.html');

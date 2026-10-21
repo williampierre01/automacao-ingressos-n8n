@@ -20,6 +20,7 @@ Get-Content -LiteralPath $envFile |
     ForEach-Object {
         $parts = $_.Split('=', 2)
         if ($parts.Count -eq 2 -and $parts[0]) {
+            if ($parts[0] -eq 'META_ACCESS_TOKEN') { return }
             [Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process')
         }
     }
