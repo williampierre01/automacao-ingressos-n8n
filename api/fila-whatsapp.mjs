@@ -67,7 +67,7 @@ export function atrasoMs(tentativas) {
 
 export function exigirBancoPronto(database) {
   const versao = Number(database.prepare('PRAGMA user_version').get().user_version);
-  if (versao < 2) {
+  if (versao < 3) {
     throw new Error('suba a API primeiro');
   }
 }

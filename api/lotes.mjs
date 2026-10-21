@@ -700,10 +700,52 @@ function criarTabelasEntrada(database) {
   `);
 }
 
-export function migrar(database, { databasePath, agora = new Date(), falharCopia = false } = {}) {
+function contarTabelasMensagem(database) {
+  const contar = (tabela) => Number(database.prepare(`SELECT COUNT(*) AS n FROM ${tabela}`).get().n);
+  return {
+    entrada: contar('mensagens_entrada'),
+    saida: contar('mensagens_saida'),
+    fila: contar('fila_webhook'),
+  };
+}
+
+function adicionarColunasEnvio(database) {
+  adicionarColuna(database, 'mensagens_saida', 'wamid_saida', 'TEXT');
+  adicionarColuna(database, 'mensagens_saida', 'tentativas', 'INTEGER NOT NULL DEFAULT 0');
+  adicionarColuna(database, 'mensagens_saida', 'proxima_tentativa_em', 'TEXT');
+  adicionarColuna(database, 'mensagens_saida', 'ultimo_erro', "TEXT NOT NULL DEFAULT ''");
+  adicionarColuna(database, 'mensagens_saida', 'enviada_em', 'TEXT');
+  adicionarColuna(database, 'mensagens_saida', 'atualizado_em', 'TEXT');
+  adicionarColuna(database, 'mensagens_saida', 'status_meta', 'TEXT');
+  adicionarColuna(database, 'mensagens_saida', 'erro_meta', 'TEXT');
+  adicionarColuna(database, 'comprovantes', 'sha256', 'TEXT');
+  adicionarColuna(database, 'comprovantes', 'apagado_em', 'TEXT');
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mensagens_saida_wamid_saida
+      ON mensagens_saida(wamid_saida) WHERE wamid_saida IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_mensagens_saida_status_proxima
+      ON mensagens_saida(status, proxima_tentativa_em);
+    CREATE TABLE IF NOT EXISTS mensagens_custo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wamid_saida TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
+      billable INTEGER,
+      pricing_model TEXT,
+      pricing_type TEXT,
+      category TEXT,
+      timestamp_meta TEXT,
+      erro_codigo TEXT,
+      erro_titulo TEXT,
+      recebido_em TEXT NOT NULL,
+      UNIQUE (wamid_saida, status)
+    );
+  `);
+}
+
+export function migrar(database, { databasePath, agora = new Date(), falharCopia = false, falharContagem = false } = {}) {
   database.exec('PRAGMA busy_timeout = 5000');
   const versao = versaoBanco(database);
-  if (versao >= 2) return { migrado: false, backup: null };
+  if (versao >= 3) return { migrado: false, backup: null };
   let backup = null;
   let migrado = false;
   if (versao < 1) {
@@ -735,6 +777,31 @@ export function migrar(database, { databasePath, agora = new Date(), falharCopia
       criarTabelasEntrada(database);
       database.exec('PRAGMA user_version = 2');
     });
+    migrado = true;
+  }
+  if (versaoBanco(database) < 3) {
+    if (!databasePath) {
+      throw new Error('Migracao abortada: caminho do banco ausente para o backup.');
+    }
+    if (!backup) backup = backupBanco(database, databasePath, agora);
+    const antes = contarTabelasMensagem(database);
+    try {
+      emTransacao(database, () => {
+        adicionarColunasEnvio(database);
+        if (falharContagem) {
+          database.prepare('DELETE FROM mensagens_saida WHERE id = (SELECT MIN(id) FROM mensagens_saida)').run();
+        }
+        const depois = contarTabelasMensagem(database);
+        if (antes.entrada !== depois.entrada || antes.saida !== depois.saida || antes.fila !== depois.fila) {
+          throw new Error(`Migracao abortada: a contagem divergiu. mensagens_entrada ${antes.entrada}->${depois.entrada}, mensagens_saida ${antes.saida}->${depois.saida}, fila_webhook ${antes.fila}->${depois.fila}.`);
+        }
+        database.exec('PRAGMA user_version = 3');
+      });
+    } catch (error) {
+      const texto = String(error.message || error);
+      const mensagem = texto.startsWith('Migracao abortada') ? texto : `Migracao abortada: ${texto}`;
+      throw new Error(backup ? `${mensagem} Backup em ${backup}.` : mensagem);
+    }
     migrado = true;
   }
   return { migrado, backup };

@@ -37,10 +37,15 @@ function sendJson(response, statusCode, body) {
 export function abrirBancoGateway(databasePath) {
   if (!existsSync(databasePath)) throw new Error('suba a API primeiro');
   const database = new DatabaseSync(databasePath);
-  database.exec('PRAGMA busy_timeout = 5000');
-  database.exec('PRAGMA journal_mode = WAL');
-  exigirBancoPronto(database);
-  return database;
+  try {
+    database.exec('PRAGMA busy_timeout = 5000');
+    database.exec('PRAGMA journal_mode = WAL');
+    exigirBancoPronto(database);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 export function receberEvento(database, rawBody, {

@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { processarMensagem } from './conversa.mjs';
+import { abrirBancoGateway } from './whatsapp-gateway.mjs';
 import {
   MARCA_COMPROVANTE_TARDIO,
   MENSAGEM_ESGOTADO,
@@ -382,7 +383,7 @@ test('migracao de banco populado preserva linhas, aceita documento vazio e e ide
     assert.equal(entrou.numero_documento, '12345678901');
     assert.equal(database.prepare(`SELECT comprador_telefone FROM pedidos WHERE id = ?`).get(pedidoId).comprador_telefone, '11988887777');
     assert.equal(database.prepare('SELECT telefone FROM conversas').get().telefone, '11988887777');
-    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 2);
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 3);
     database.prepare(`
       INSERT INTO participantes (pedido_id, evento_id, nome_completo, status_ingresso, criado_em, atualizado_em)
       VALUES (?, ?, 'Sem documento', 'pendente', ?, ?)
@@ -452,7 +453,7 @@ test('migracao da versao 0 grava backup mesmo sem recriar participantes', async 
     const sql = backup.prepare(`SELECT sql FROM sqlite_master WHERE name = 'participantes'`).get().sql;
     assert.doesNotMatch(sql, /tipo_documento TEXT NOT NULL/i);
     backup.close();
-    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 2);
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 3);
     assert.equal(migrar(database, { databasePath: caminho }).backup, null);
     database.close();
   } finally {
@@ -1198,5 +1199,100 @@ test('comprovante de outro telefone responde 403', async () => {
     conferido.close();
   } finally {
     await stopApi(api);
+  }
+});
+
+function bancoVersao2(caminho) {
+  const database = new DatabaseSync(caminho);
+  database.exec(schema);
+  database.exec('DROP INDEX IF EXISTS idx_mensagens_saida_wamid_saida');
+  database.exec('DROP INDEX IF EXISTS idx_mensagens_saida_status_proxima');
+  for (const coluna of ['erro_meta', 'status_meta', 'atualizado_em', 'enviada_em', 'ultimo_erro', 'proxima_tentativa_em', 'tentativas', 'wamid_saida']) {
+    database.exec(`ALTER TABLE mensagens_saida DROP COLUMN ${coluna}`);
+  }
+  database.exec('ALTER TABLE comprovantes DROP COLUMN sha256');
+  database.exec('ALTER TABLE comprovantes DROP COLUMN apagado_em');
+  database.exec('DROP TABLE mensagens_custo');
+  database.exec('PRAGMA user_version = 2');
+  return database;
+}
+
+test('migracao para a versao 3 faz backup, preserva a contagem e a versao 2 nao abre o gateway', async () => {
+  const diretorio = await temporario();
+  let database;
+  try {
+    const caminho = join(diretorio, 'v2.sqlite');
+    database = bancoVersao2(caminho);
+    const agora = agoraIso();
+    database.prepare(`
+      INSERT INTO mensagens_entrada (wamid, telefone, nome, tipo, texto, recebida_em, origem)
+      VALUES ('wamid.v2', '5511999999999', 'Ana', 'texto', 'oi', ?, 'whatsapp')
+    `).run(agora);
+    database.prepare(`
+      INSERT INTO mensagens_saida (wamid, texto, status, criada_em)
+      VALUES ('wamid.v2', 'resposta', 'pendente_envio', ?)
+    `).run(agora);
+    database.prepare(`
+      INSERT INTO fila_webhook (
+        wamid, telefone, nome, tipo, texto, timestamp_mensagem, origem, evento_codigo,
+        corpo, status, tentativas, proxima_tentativa_em, ultimo_erro, criado_em, atualizado_em
+      ) VALUES ('wamid.v2', '5511999999999', 'Ana', 'texto', 'oi', ?, 'whatsapp', '', '', 'pendente', 0, ?, '', ?, ?)
+    `).run(agora, agora, agora, agora);
+    assert.throws(() => abrirBancoGateway(caminho), /suba a API primeiro/);
+    const resultado = migrar(database, { databasePath: caminho, agora: new Date('2026-10-21T12:00:00.000Z') });
+    assert.equal(resultado.migrado, true);
+    assert.ok(resultado.backup);
+    const backups = (await readdir(diretorio)).filter((nome) => nome.startsWith('backup-pre-migracao-'));
+    assert.equal(backups.length, 1);
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 3);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n), 1);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM mensagens_saida').get().n), 1);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM fila_webhook').get().n), 1);
+    assert.equal(database.prepare(`SELECT name FROM pragma_table_info('mensagens_saida') WHERE name = 'wamid_saida'`).get().name, 'wamid_saida');
+    assert.match(database.prepare(`SELECT sql FROM sqlite_master WHERE name = 'idx_mensagens_saida_wamid_saida'`).get().sql, /UNIQUE/);
+    assert.equal(database.prepare(`SELECT name FROM sqlite_master WHERE name = 'mensagens_custo'`).get().name, 'mensagens_custo');
+    assert.equal(migrar(database, { databasePath: caminho }).backup, null);
+    database.close();
+    const aberto = abrirBancoGateway(caminho);
+    aberto.close();
+  } finally {
+    try { database?.close(); } catch { /* ja fechado */ }
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('migracao da versao 3 aborta se a contagem divergir ou se faltar o caminho', async () => {
+  const diretorio = await temporario();
+  let database;
+  try {
+    const caminho = join(diretorio, 'diverge.sqlite');
+    database = bancoVersao2(caminho);
+    const agora = agoraIso();
+    database.prepare(`
+      INSERT INTO mensagens_entrada (wamid, telefone, nome, tipo, texto, recebida_em, origem)
+      VALUES ('wamid.d', '5511', '', 'texto', 'oi', ?, 'whatsapp')
+    `).run(agora);
+    database.prepare(`
+      INSERT INTO mensagens_saida (wamid, texto, status, criada_em)
+      VALUES ('wamid.d', 'resposta', 'pendente_envio', ?)
+    `).run(agora);
+    assert.throws(
+      () => migrar(database, { databasePath: caminho, falharContagem: true }),
+      /mensagens_saida 1->0/,
+    );
+    assert.equal(Number(database.prepare('PRAGMA user_version').get().user_version), 2);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM mensagens_saida').get().n), 1);
+    const backups = (await readdir(diretorio)).filter((nome) => nome.startsWith('backup-pre-migracao-'));
+    assert.equal(backups.length, 1);
+    database.close();
+
+    const semCaminho = new DatabaseSync(':memory:');
+    semCaminho.exec(schema);
+    semCaminho.exec('PRAGMA user_version = 2');
+    assert.throws(() => migrar(semCaminho), /caminho do banco ausente/);
+    semCaminho.close();
+  } finally {
+    try { database.close(); } catch { /* ja fechado */ }
+    await rm(diretorio, { recursive: true, force: true });
   }
 });
