@@ -324,6 +324,7 @@ try {
   $psi.EnvironmentVariables['N8N_VIRADA_LOTE_WEBHOOK_URL'] = 'http://127.0.0.1:9/virada'
   $psi.EnvironmentVariables['API_TLS_CERT_PATH'] = ''
   $psi.EnvironmentVariables['API_TLS_KEY_PATH'] = ''
+  $psi.EnvironmentVariables['USAR_PORTA_TESTE'] = '1'
 
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi

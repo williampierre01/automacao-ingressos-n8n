@@ -145,7 +145,12 @@ export async function entregarAoN8n(mensagem, webhookUrl, token) {
   return { status: response.status, erro };
 }
 
-export function iniciarWorker(database, { entregar, portaApi = '8000', intervaloMs = 1000 } = {}) {
+export function iniciarWorker(database, {
+  entregar,
+  portaApi = '8000',
+  usarPortaTeste = false,
+  intervaloMs = 1000,
+} = {}) {
   retomarProcessando(database);
   let parado = false;
   let timer = null;
@@ -157,6 +162,7 @@ export function iniciarWorker(database, { entregar, portaApi = '8000', intervalo
         entregar,
         maximo: maxTentativas(),
         portaApi,
+        usarPortaTeste,
       });
       if (resultado.processou) espera = 0;
     } catch (error) {
@@ -202,6 +208,7 @@ if (executadoDireto()) {
   const eventoCodigo = process.env.WHATSAPP_EVENTO_CODIGO || '';
   const pararWorker = iniciarWorker(database, {
     portaApi,
+    usarPortaTeste: process.env.USAR_PORTA_TESTE === '1',
     entregar: (mensagem) => entregarAoN8n(mensagem, webhook, internalToken),
   });
   const server = criarGateway({ database, appSecret, verifyToken, eventoCodigo });

@@ -307,6 +307,7 @@ function Iniciar-Gateway([string]$webhook, [string]$eventoCodigo) {
   $psi.EnvironmentVariables['WHATSAPP_EVENTO_CODIGO'] = $codigoEvento
   $psi.EnvironmentVariables['API_TLS_CERT_PATH'] = ''
   $psi.EnvironmentVariables['API_TLS_KEY_PATH'] = ''
+  $psi.EnvironmentVariables['USAR_PORTA_TESTE'] = '1'
   $script:gateway = New-Object System.Diagnostics.Process
   $script:gateway.StartInfo = $psi
   [void]$script:gateway.Start()
@@ -698,6 +699,7 @@ server.listen(porta, "127.0.0.1");
   $psi.EnvironmentVariables['N8N_WEBHOOK_URL'] = 'http://127.0.0.1:5678/webhook/whatsapp-mensagens'
   $psi.EnvironmentVariables['API_TLS_CERT_PATH'] = ''
   $psi.EnvironmentVariables['API_TLS_KEY_PATH'] = ''
+  $psi.EnvironmentVariables['USAR_PORTA_TESTE'] = '1'
 
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi
@@ -731,6 +733,7 @@ server.listen(porta, "127.0.0.1");
       origem = 'teste'
       evento_codigo = $evento
       porta_api = $porta
+      usar_porta_teste = 1
     } | ConvertTo-Json -Compress
     $respSonda = Invoke-Webhook $sonda ''
     if ($respSonda.Status -eq 401) { $webhookPronto = $true; break }
@@ -786,6 +789,7 @@ server.listen(porta, "127.0.0.1");
     origem = 'teste'
     evento_codigo = $evento
     porta_api = $porta
+    usar_porta_teste = 1
   } | ConvertTo-Json -Compress
   $webhook = Invoke-Webhook $imagem "Bearer $script:internalToken"
   $respostaImagem = ''
@@ -983,6 +987,7 @@ server.listen(porta, "127.0.0.1");
       origem = 'teste'
       evento_codigo = $script:evento
       porta_api = $script:porta
+      usar_porta_teste = 1
     } | ConvertTo-Json -Compress
     $resp = Invoke-Webhook $corpo ''
     $estado = Estado-Atual
@@ -1007,6 +1012,7 @@ server.listen(porta, "127.0.0.1");
       origem = 'teste'
       evento_codigo = $script:evento
       porta_api = $script:porta
+      usar_porta_teste = 1
     } | ConvertTo-Json -Compress
     $resp = Invoke-Webhook $corpo 'Bearer token-errado-com-24-caracteres'
     $estado = Estado-Atual
@@ -1050,6 +1056,7 @@ server.listen(porta, "127.0.0.1");
         origem = 'teste'
         evento_codigo = $script:evento
         porta_api = $script:porta
+      usar_porta_teste = 1
       } | ConvertTo-Json -Compress
       $resp = Invoke-Webhook $corpo "Bearer $script:internalToken"
       $estado = Estado-Atual

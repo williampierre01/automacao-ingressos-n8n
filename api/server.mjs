@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { apagarEntregues, listarFalhas, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -893,17 +893,19 @@ const requestListener = async (request, response) => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${internalToken}`,
         },
-        body: JSON.stringify({
+        body: JSON.stringify(montarCorpoSimulador({
           telefone: payload.telefone,
           nome: payload.nome,
-          tipo: 'texto',
           texto: payload.mensagem,
           id_mensagem: payload.id_mensagem,
-          timestamp: new Date().toISOString(),
           origem: payload.origem,
           evento_codigo: payload.evento_codigo,
-          porta_api: port,
-        }),
+          usar_porta_teste: body.usar_porta_teste,
+          porta_api: body.porta_api,
+        }, {
+          porta: port,
+          usarPortaTeste: process.env.USAR_PORTA_TESTE === '1',
+        })),
         signal: AbortSignal.timeout(30_000),
       });
       const responseText = await n8nResponse.text();
