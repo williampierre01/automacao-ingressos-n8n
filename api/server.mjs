@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { rodarRotinas } from './rotinas.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -915,6 +916,10 @@ const requestListener = async (request, response) => {
       } catch {
         n8nResult = { erro: 'O n8n nao devolveu JSON.' };
       }
+      if (n8nResponse.status === 401) {
+        sendJson(response, 502, { erro: 'O n8n recusou o webhook.' });
+        return;
+      }
       if (!n8nResponse.ok) {
         sendJson(response, n8nResponse.status >= 400 ? n8nResponse.status : 502, {
           erro: n8nResult.erro || 'O n8n nao conseguiu processar a mensagem.',
@@ -1014,13 +1019,15 @@ const requestListener = async (request, response) => {
 };
 
 const expirationTimer = setInterval(() => {
-  try {
-    expirarReservas(database);
-    reterCorpos(database, retencaoDias());
-    apagarEntregues(database, retencaoDias());
-  } catch (error) {
-    console.error(`Falha ao expirar reservas: ${error.message}`);
-  }
+  rodarRotinas([
+    () => expirarReservas(database),
+    () => {
+      reterCorpos(database, retencaoDias());
+      apagarEntregues(database, retencaoDias());
+    },
+  ], (error) => {
+    console.error(`Falha na rotina periodica: ${error.message}`);
+  });
 }, 60_000);
 expirationTimer.unref();
 
