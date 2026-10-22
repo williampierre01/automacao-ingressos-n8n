@@ -171,6 +171,33 @@ test('imagem valida grava arquivo relativo, pedido em analise e nao baixa o mesm
   }
 });
 
+test('wamid gravado durante o download apaga o arquivo e nao cria saida', async () => {
+  const ctx = await bancoTemporario();
+  const id = 'wamid-corrida';
+  const saidas = ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_saida').get().n;
+  const comprovantes = ctx.database.prepare('SELECT COUNT(*) AS n FROM comprovantes').get().n;
+  try {
+    const resultado = await processarEntrada(ctx.database, entradaImagem({ id, campos: { id_mensagem: id } }), {
+      pastaComprovantes: ctx.pasta,
+      baixar: async () => {
+        ctx.database.prepare(`
+          INSERT INTO mensagens_entrada (wamid, telefone, nome, tipo, texto, recebida_em, origem)
+          VALUES (?, ?, 'Ana', 'imagem', '', ?, 'whatsapp')
+        `).run(id, digitosTelefone('11988887777'), new Date().toISOString());
+        writeFileSync(join(ctx.pasta, 'corrida.png'), png);
+        return { nomeArquivo: 'corrida.png', mime: 'image/png', tamanho: png.length, sha256: hashPng };
+      },
+    });
+    assert.deepEqual(resultado, { duplicada: true });
+    assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 1);
+    assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_saida').get().n, saidas);
+    assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM comprovantes').get().n, comprovantes);
+    assert.equal((await readdir(ctx.pasta)).length, 0);
+  } finally {
+    await encerrar(ctx);
+  }
+});
+
 test('comprovante de pedido expirado usa a marca de atraso', async () => {
   const ctx = await bancoTemporario();
   ctx.database.prepare(`UPDATE pedidos SET status = 'expirado' WHERE id = ?`).run(ctx.pedidoId);

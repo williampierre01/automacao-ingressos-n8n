@@ -233,7 +233,14 @@ async function processarMidia(database, entrada, tipo, {
   try {
     return emTransacao(database, () => {
       const existente = database.prepare('SELECT wamid FROM mensagens_entrada WHERE wamid = ?').get(entrada.id_mensagem);
-      if (existente) return { duplicada: true, apagar: true };
+      if (existente) {
+        try {
+          unlinkSync(join(pastaComprovantes, arquivo.nomeArquivo));
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+        return { duplicada: true };
+      }
       database.prepare(`
         INSERT INTO mensagens_entrada (wamid, telefone, nome, tipo, texto, recebida_em, origem)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -288,14 +295,9 @@ export async function processarEntrada(database, entrada, {
   if (existente) return { duplicada: true };
 
   if (TIPOS_ARQUIVO.has(tipo)) {
-    const resultado = await processarMidia(database, { ...entrada, id_mensagem: wamid }, tipo, {
+    return processarMidia(database, { ...entrada, id_mensagem: wamid }, tipo, {
       agora, pastaComprovantes, baixar, env,
     });
-    if (resultado?.apagar && arquivo?.nomeArquivo && pastaComprovantes) {
-      try { unlinkSync(join(pastaComprovantes, arquivo.nomeArquivo)); } catch { /* ja removido */ }
-      return { duplicada: true };
-    }
-    return resultado;
   }
 
   const ehReacao = tipo === 'reacao';
