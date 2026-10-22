@@ -32,9 +32,9 @@ O que so a Meta real prova, e nao foi provado: aceite do token e do phone number
 
 O WhatsApp e o simulador chegam na venda pelo mesmo caminho.
 
-1. O gateway valida o HMAC, grava uma linha por mensagem em `fila_webhook` e responde 200. `statuses[]` não entra na fila. Se `user_version` for menor que 2, o gateway recusa subir com `suba a API primeiro`.
-2. O worker entrega a mensagem mais antiga de cada telefone ao webhook `whatsapp-mensagens`, com `Authorization: Bearer` do `API_INTERNAL_TOKEN` e timeout de 30 s. 404, 408, 425, 429, 5xx, timeout e erro de rede esperam, com backoff até 300 s e no máximo `FILA_MAX_TENTATIVAS` (padrão 30). Os outros 4xx marcam `falhou` na hora. Se a entrega processou uma linha, o próximo ciclo é imediato; o intervalo de 1 s só vale com a fila vazia. O admin lista as falhas, a contagem de pendentes e processando e a idade do pendente mais antigo (alerta acima de 300 s). `POST /admin/whatsapp/fila/:id/reenfileirar` devolve o item; se já houver mensagem mais nova do mesmo telefone entregue, responde aviso e só segue com `confirmar=1`. O corpo bruto de uma falha some depois de `FILA_RETENCAO_DIAS` (padrão 7). Linha `entregue` mais velha que esse prazo é apagada. `mensagens_entrada` e `mensagens_saida` ficam.
-3. O fluxo 04 repassa o cabeçalho `Authorization` recebido para `POST /interno/mensagem` (timeout 15 s) e devolve o JSON. Não há `$env` nem lógica de venda no n8n. `saveDataSuccessExecution=none`, `saveDataErrorExecution=none` e `saveManualExecutions=false`. O n8n 2.34.6 ainda grava a execução de sucesso e só preenche `deletedAt`, com o corpo no banco. `scripts/iniciar-n8n.ps1` cria o trigger `limpar_execucao_apagada`, que apaga essa linha e o corpo, e ao subir apaga as que já estavam marcadas. Não foi reproduzida uma execução com status de erro: o nó HTTP usa `continueErrorOutput` e `neverError`, e JSON inválido ou gzip responde erro sem gravar linha. Não ficou provado se o trigger cobriria esse caso.
+1. O gateway valida o HMAC, grava uma linha por mensagem em `fila_webhook` e responde 200. `statuses[]` não entra na fila. `api/fila-whatsapp.mjs` exige `user_version >= 3` e, abaixo disso, recusa subir com `suba a API primeiro`.
+2. O worker entrega a mensagem mais antiga de cada telefone ao webhook `whatsapp-mensagens`, com `Authorization: Bearer` do `API_INTERNAL_TOKEN` e timeout de 45 s (`api/whatsapp-gateway.mjs`). 404, 408, 425, 429, 5xx, timeout e erro de rede esperam, com backoff até 300 s e no máximo `FILA_MAX_TENTATIVAS` (padrão 30). Os outros 4xx marcam `falhou` na hora. Se a entrega processou uma linha, o próximo ciclo é imediato; o intervalo de 1 s só vale com a fila vazia. O admin lista as falhas, a contagem de pendentes e processando e a idade do pendente mais antigo (alerta acima de 300 s). `POST /admin/whatsapp/fila/:id/reenfileirar` devolve o item; se já houver mensagem mais nova do mesmo telefone entregue, responde aviso e só segue com `confirmar=1`. O corpo bruto de uma falha some depois de `FILA_RETENCAO_DIAS` (padrão 7). Linha `entregue` mais velha que esse prazo é apagada. `mensagens_entrada` e `mensagens_saida` ficam.
+3. O fluxo 04 repassa o cabeçalho `Authorization` recebido para `POST /interno/mensagem` (timeout 30 s, `workflows/04-webhook-whatsapp-simulado.json`) e devolve o JSON. Não há `$env` nem lógica de venda no n8n. `saveDataSuccessExecution=none`, `saveDataErrorExecution=none` e `saveManualExecutions=false`. O n8n 2.34.6 ainda grava a execução de sucesso e só preenche `deletedAt`, com o corpo no banco. `scripts/iniciar-n8n.ps1` cria o trigger `limpar_execucao_apagada`, que apaga essa linha e o corpo, e ao subir apaga as que já estavam marcadas. Não foi reproduzida uma execução com status de erro: o nó HTTP usa `continueErrorOutput` e `neverError`, e JSON inválido ou gzip responde erro sem gravar linha. Não ficou provado se o trigger cobriria esse caso.
 4. A API registra o `wamid`, roda `processarMensagem` e grava `mensagens_saida` com status `pendente_envio` na mesma transação. O envio e o comprovante por imagem estão na seção de 2026-10-21.
 
 `POST /simular-mensagem` monta esse JSON e espera o n8n. Continua exigindo `SIMULADOR_ATIVO=1`. `POST /atendimentos` permanece para os fluxos 02 e 03.
@@ -64,7 +64,7 @@ Isso executa `import:workflow --input=workflows/04-webhook-whatsapp-simulado.jso
 - **Idempotência parcial de log**: `atendimentos.id_mensagem UNIQUE` (`schema.sql` L13); `POST /atendimentos` devolve 409 se repetir (`server.mjs` L1116–1118).
 - **Gateway WhatsApp**: GET de verificação com `hub.mode=subscribe` + `hub.verify_token` lido de `work/whatsapp/verify-token.txt`, comparado em tempo constante. POST exige `X-Hub-Signature-256` (HMAC-SHA256 do corpo bruto com `META_APP_SECRET`) e responde 401 sem assinatura válida, antes de encaminhar ao n8n. Corpo acima de 1 MB responde 413 antes do HMAC (`api/body.mjs`). Bind em `127.0.0.1:8001`. Túnel Cloudflare *quick* em `scripts/iniciar-tunel-whatsapp.ps1`.
 - **Scripts de boot**: Node 22.22.3 portátil + n8n `2.34.6` (`scripts/preparar-ambiente.ps1`, `scripts/iniciar-n8n.ps1` L46). `iniciar-projeto.ps1` sobe API e n8n.
-- **HTTPS local mkcert** (`scripts/configurar-https-local.ps1`, `iniciar-api-https.ps1`): certs em `work/https/` (coberto por `work/` no `.gitignore`). Continua em `0.0.0.0:8443`, com a mesma autenticação do HTTP.
+- **HTTPS local mkcert** (`scripts/configurar-https-local.ps1`, `iniciar-api-https.ps1`): certs em `work/https/` (coberto por `work/` no `.gitignore`). O fallback de `API_HTTPS_HOST` é `127.0.0.1` (`api/server.mjs`). Um `work/https/https.env` antigo pode continuar em `0.0.0.0` até rodar `scripts/configurar-https-local.ps1` de novo. A autenticação é a mesma do HTTP.
 - **Simulador** `web/simulador.html` só é servido com `SIMULADOR_ATIVO=1` (`GET /` e `GET /simulador`). Sem a flag, 404. O admin `web/admin.html` continua em `GET /admin`.
 - **Workflows 01–03**: simulação manual / formulário n8n / POST `/atendimentos`. Workflow 04: webhook `whatsapp-mensagens` encaminha o JSON ao `POST /interno/mensagem` e devolve a resposta (`workflows/04-webhook-whatsapp-simulado.json`). O JSON exportado continua `active: false`; a publicação é `publish:workflow`.
 
@@ -87,7 +87,7 @@ Isso executa `import:workflow --input=workflows/04-webhook-whatsapp-simulado.jso
 - **Check-in é por CPF/RG/protocolo**, não por nome normalizado (regra de negócio alvo: lista por **nome**).
 - **Estados do pedido** no schema (`iniciado`, `aguardando_pagamento`, `concluido`…) ≠ estados alvo (`aguardando_nomes`, `em_validacao`, `revisao_manual`…).
 - **Workflows sem retry/onError** (grep zerado). 409 de `id_mensagem` falha o webhook em vez de 200 idempotente.
-- **n8n exportado `active: false`**: o JSON no git não prova que o fluxo está publicado na instância local. **Não confirmado** no runtime.
+- **n8n exportado `active: false`**: o JSON no git nasce inativo. A instância local foi republicada em 2026-10-21; ver a seção dessa data.
 
 ## Variáveis de ambiente
 
@@ -99,12 +99,20 @@ Definidas em `.env.example` (valores de segredo **não** reproduzidos):
 - `META_APP_SECRET` — obrigatório para o gateway; sem ele o gateway não sobe
 - `SIMULADOR_ATIVO` — só `1` liga o simulador; o padrão é desligado
 - `API_DATABASE_PATH`, `API_HOST`, `API_PORT`
-- `API_HTTPS_HOST` (no `.env.example`, `127.0.0.1`; o fallback do código e o `https.env` gerado continuam `0.0.0.0`), `API_HTTPS_PORT` (8443)
+- `API_HTTPS_HOST` (fallback do código `127.0.0.1`, igual ao `.env.example`; um `work/https/https.env` antigo pode continuar em `0.0.0.0` até rodar `scripts/configurar-https-local.ps1` de novo), `API_HTTPS_PORT` (8443)
 - `API_TLS_CERT_PATH`, `API_TLS_KEY_PATH` (juntas ou nenhuma)
 - `N8N_WEBHOOK_URL` (padrão `http://127.0.0.1:5678/webhook/whatsapp-mensagens`)
 - `API_INTERNAL_TOKEN` — obrigatório, no mínimo 24 caracteres; abaixo disso a API e o gateway não sobem. O gateway e `POST /simular-mensagem` enviam este Bearer ao webhook. O fluxo 04 só repassa o cabeçalho recebido.
 - `WHATSAPP_EVENTO_CODIGO` — vazio usa o único evento com vendas abertas
 - `FILA_MAX_TENTATIVAS` (padrão 30) e `FILA_RETENCAO_DIAS` (padrão 7)
+- `META_ACCESS_TOKEN` — mínimo 24 caracteres; vazio desliga o envio
+- `META_PHONE_NUMBER_ID`
+- `META_GRAPH_VERSION`
+- `META_GRAPH_BASE_URL`
+- `ENVIO_MAX_TENTATIVAS` (30)
+- `COMPROVANTE_RETENCAO_DIAS_APROVADO` (30)
+- `COMPROVANTE_RETENCAO_DIAS_RECUSADO` (7)
+- `COMPROVANTES_DIR` e `USAR_PORTA_TESTE` — override só de teste, sem valor neste documento
 - O processo do `iniciar-n8n.ps1` não recebe `API_INTERNAL_TOKEN`, `ADMIN_TOKEN`, `META_APP_SECRET` nem as variáveis da API. `N8N_LISTEN_ADDRESS=127.0.0.1`. `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none`, `EXECUTIONS_DATA_SAVE_ON_ERROR=none`, `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false`, `EXECUTIONS_DATA_SAVE_ON_PROGRESS=false`, `EXECUTIONS_DATA_PRUNE=true` e `EXECUTIONS_DATA_MAX_AGE=72` ficam nesse script, não no `.env`
 - `GATEWAY_PORT` — vazio usa `8001`
 - `N8N_VIRADA_LOTE_WEBHOOK_URL` — opcional; aviso de virada ou esgotamento. Vazio ou n8n fora do ar não desfaz a aprovação
@@ -154,12 +162,12 @@ Testes: `node --test`.
 2. `powershell -ExecutionPolicy Bypass -File .\scripts\preparar-ambiente.ps1` → Node `22.22.3` em `work/runtime/`.
 3. Copiar `.env.example` → `.env` e preencher `N8N_ENCRYPTION_KEY`, `ADMIN_TOKEN`, `API_INTERNAL_TOKEN` e `META_APP_SECRET` (não commitar).
 4. `.\scripts\iniciar-projeto.ps1` (ou `iniciar-n8n.ps1` + `iniciar-api.ps1`).
-5. Abrir n8n `http://localhost:5678`, importar/ativar `workflows/04-webhook-whatsapp-simulado.json` (**não confirmado** se já está ativo na pasta `work/n8n-user`).
+5. Abrir n8n `http://localhost:5678`. O fluxo 04 foi republicado em 2026-10-21; para publicar de novo, usar `scripts/publicar-fluxo-04.ps1` com o n8n fechado.
 6. Simulador, só com `SIMULADOR_ATIVO=1`: `http://127.0.0.1:8000/simulador`. Admin: `http://127.0.0.1:8000/admin` (a página pede o `ADMIN_TOKEN`).
 7. Exportar log antigo: `.\scripts\exportar-planilha.ps1` → `planilha/dados/atendimentos.csv` (envia o Bearer). Lista de entrada: botão no admin ou `GET /admin/eventos/:codigo/exportar-participantes.csv` com o mesmo token.
 8. Gateway (opcional): `META_APP_SECRET` no `.env`, token em `work/whatsapp/verify-token.txt`, `iniciar-gateway-whatsapp.ps1` + `iniciar-tunel-whatsapp.ps1` (exige `work/tools/cloudflared.exe`).
 
-O computador precisa ficar ligado. Integração Meta **não** está concluída no código.
+O computador precisa ficar ligado. O envio existe no código e foi exercitado com Graph falso; app e número reais da Meta não foram configurados.
 
 ## `.gitignore` vs pedido da Fase 1
 
@@ -173,6 +181,15 @@ O computador precisa ficar ligado. Integração Meta **não** está concluída n
 | `contexto_n8n.txt` | Sim (`.gitignore`) |
 | Exportações de conversas WhatsApp | Sim: `conversas/`, `chats/`, `exports/whatsapp/` |
 
-## README desatualizado
+Conferencia desta higiene, em 2026-10-22: `node --test` passou 83 e falhou 0.
 
-A seção **Estrutura** (`README.md` L38–47) omite `api/`, `web/`, `scripts/` além do n8n, e `data/`. O corpo do README *menciona* API, admin e simulador, mas a árvore não. `docs/arquitetura.md` ainda cita Google Sheets.
+## Divida conhecida
+
+Sem alterar código nesta higiene:
+
+- A recusa não reabre o pedido. O motivo fica só no admin. Reenvio e reembolso não existem. Imagem nova só entra em `aguardando_pagamento` ou no expirado mais recente. `COMPRAR` abre outra venda.
+- `limite_por_comprador` tem default 5 e não entra na conta. Vale `max_ingressos_por_pessoa`, default 10; `NULL` não limita. No cadastro, a coluna antiga recebe o máximo informado, ou 10 se o corpo omitir esse máximo.
+- `documento_obrigatorio` tem default 1 no schema. O seed grava 0. O cadastro grava 0 e só grava 1 quando o corpo manda `documento_obrigatorio` true.
+- O texto do evento de demonstração ainda diz "Apresente seu documento na entrada". É dado de seed; não copiar para o evento real.
+- `esgotado` existe no CHECK do lote, mas a virada grava `encerrado`. Esgotado é a situação do evento e do catálogo.
+- Não há CHECK dos estados da saída. A regra está em `api/envio-whatsapp.mjs`.
