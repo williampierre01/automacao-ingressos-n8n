@@ -1,3 +1,5 @@
+DESATUALIZADO: historico anterior a Tarefa 4a. Valem docs/OBJETIVO.md e docs/ESTADO_ATUAL.md.
+
 # Revisão — Fase 1
 
 Revisão em 2026-10-12, só leitura de código e docs. Runtime (API, n8n e gateway no ar) **não confirmado**. Segredos de `.env` não foram abertos nem impressos.

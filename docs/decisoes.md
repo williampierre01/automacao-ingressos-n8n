@@ -1,3 +1,5 @@
+DESATUALIZADO: historico anterior a Tarefa 4a. Valem docs/OBJETIVO.md e docs/ESTADO_ATUAL.md.
+
 # Registro de decisoes
 
 ## 2026-08-17 - Ferramentas gratuitas
