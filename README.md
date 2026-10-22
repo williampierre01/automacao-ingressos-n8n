@@ -1,6 +1,6 @@
 # Atendimento pelo WhatsApp com n8n
 
-Projeto de aprendizagem para criar uma automacao gratuita que recebe uma conversa pelo WhatsApp, coleta informacoes e registra os dados em uma planilha.
+Projeto de aprendizagem para vender uma festa pelo WhatsApp, com custo minimo. A regra vigente esta em `docs/OBJETIVO.md`. O que o codigo faz esta em `docs/ESTADO_ATUAL.md`.
 
 ## Situacao atual
 
@@ -17,23 +17,22 @@ Projeto de aprendizagem para criar uma automacao gratuita que recebe uma convers
 ## Caminho da automacao
 
 ```text
-Usuario inicia a conversa no WhatsApp
-                 |
-                 v
-         WhatsApp Cloud API
-                 |
-                 v
-                n8n
-        pergunta, valida e confirma
-                 |
-                 v
-       API local + SQLite
-                 |
-                 v
-        Planilha para Excel
+WhatsApp Cloud API
+        |
+        v
+      gateway
+        |
+        v
+    fila SQLite
+        |
+        v
+     fluxo 04
+        |
+        v
+    API local
 ```
 
-Para manter o prototipo sem custos, o usuario inicia a conversa e o atendimento acontece dentro da janela gratuita de atendimento do WhatsApp. O n8n roda localmente no computador.
+A planilha e exportacao. A venda fica na API. O custo e minimo e a resposta usa a janela de 24 h aberta pelo cliente. O n8n roda localmente no computador.
 
 ## Estrutura
 
@@ -124,7 +123,7 @@ A mesma tela mostra pagamentos em analise e o alerta de virada de lote. O admini
 
 Cada evento tambem possui os botoes **Ver confirmados** e **Exportar para Excel**. A lista inclui somente participantes de pedidos com pagamento aprovado e pode ser usada na conferencia da entrada.
 
-Na secao **Check-in na entrada**, procure o participante pelo CPF, RG ou protocolo. Depois de conferir os dados, clique em **Confirmar entrada**. O ingresso passa para `utilizado` e uma segunda tentativa exibe o alerta de entrada ja registrada.
+Na secao **Check-in na entrada**, procure o participante pelo CPF, RG ou protocolo. A busca por nome ainda nao existe. Depois de conferir os dados, clique em **Confirmar entrada**. O ingresso passa para `utilizado` e uma segunda tentativa exibe o alerta de entrada ja registrada.
 
 ## Webhook para mensagens externas
 
