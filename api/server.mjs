@@ -1,13 +1,17 @@
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { apagarEntregues, listarFalhas, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
+import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
+import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
+import { iniciarRetencao } from './retencao-comprovantes.mjs';
+import { rodarRotinas } from './rotinas.mjs';
 import {
   MENSAGEM_ESGOTADO,
   MENSAGEM_PAUSADA,
@@ -16,6 +20,7 @@ import {
   expirarReservas,
   garantirEventoDemonstracao,
   listarViradasPendentes,
+  loteCatalogo,
   lotePublico,
   marcarAnunciada,
   migrar,
@@ -27,14 +32,16 @@ import {
 const apiFolder = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(apiFolder);
 const dataFolder = join(projectRoot, 'data');
-const receiptsFolder = join(dataFolder, 'comprovantes');
+const receiptsFolder = process.env.COMPROVANTES_DIR
+  ? resolve(process.env.COMPROVANTES_DIR)
+  : join(dataFolder, 'comprovantes');
 const databasePath = process.env.API_DATABASE_PATH || join(dataFolder, 'atendimentos.sqlite');
 const simulatorPath = join(projectRoot, 'web', 'simulador.html');
 const adminPath = join(projectRoot, 'web', 'admin.html');
 const schemaPath = join(apiFolder, 'schema.sql');
 const host = process.env.API_HOST || '127.0.0.1';
 const port = Number(process.env.API_PORT || 8000);
-const httpsHost = process.env.API_HTTPS_HOST || '0.0.0.0';
+const httpsHost = process.env.API_HTTPS_HOST || '127.0.0.1';
 const httpsPort = Number(process.env.API_HTTPS_PORT || 8443);
 const tlsCertificatePath = process.env.API_TLS_CERT_PATH || '';
 const tlsKeyPath = process.env.API_TLS_KEY_PATH || '';
@@ -48,6 +55,8 @@ if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
 
 const adminToken = requireSecret('ADMIN_TOKEN');
 const internalToken = requireSecret('API_INTERNAL_TOKEN');
+const envioConfig = configEnvio();
+if (envioConfig.motivo) console.error(envioConfig.motivo);
 
 mkdirSync(dataFolder, { recursive: true });
 mkdirSync(receiptsFolder, { recursive: true });
@@ -187,6 +196,11 @@ const checkInParticipantStatement = database.prepare(`
   WHERE pt.id = ? AND pt.evento_id = ? AND p.status_pagamento = 'aprovado'
 `);
 
+function rotaHttpsFechada(method, pathname) {
+  if (pathname === '/interno' || pathname.startsWith('/interno/')) return true;
+  return method === 'POST' && pathname === '/atendimentos';
+}
+
 function requiresAdmin(method, pathname) {
   if (pathname.startsWith('/admin/')) return true;
   return method === 'GET' && (pathname === '/atendimentos' || pathname === '/exportar');
@@ -309,6 +323,11 @@ const requestListener = async (request, response) => {
 
   const url = new URL(request.url || '/', `http://${request.headers.host || `${host}:${port}`}`);
 
+  if (request.socket?.encrypted && rotaHttpsFechada(request.method, url.pathname)) {
+    sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+    return;
+  }
+
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
@@ -388,13 +407,13 @@ const requestListener = async (request, response) => {
       sendJson(response, 404, { erro: 'Evento nao encontrado.' });
       return;
     }
-    const lots = lotsByEventStatement.all(event.id).map(lotePublico);
-    const situacao = situacaoLotes(lots);
+    const lots = lotsByEventStatement.all(event.id).map(loteCatalogo);
+    const situacao = situacaoLotes(lotsByEventStatement.all(event.id));
     sendJson(response, 200, {
       evento: publicEvent(event),
       lotes: lots,
       situacao: situacao.tipo,
-      lote_atual: situacao.tipo === 'vigente' ? lotePublico(situacao.lote) : null,
+      lote_atual: situacao.tipo === 'vigente' ? loteCatalogo(situacao.lote) : null,
     });
     return;
   }
@@ -424,7 +443,7 @@ const requestListener = async (request, response) => {
       sendJson(response, 404, { erro: 'Nao existe lote disponivel neste momento.', situacao: situacao.tipo });
       return;
     }
-    sendJson(response, 200, { evento: publicEvent(event), lote: lotePublico(situacao.lote), situacao: situacao.tipo });
+    sendJson(response, 200, { evento: publicEvent(event), lote: loteCatalogo(situacao.lote), situacao: situacao.tipo });
     return;
   }
 
@@ -499,6 +518,15 @@ const requestListener = async (request, response) => {
   }
 
   const createLotMatch = url.pathname.match(/^\/admin\/eventos\/([^/]+)\/lotes$/);
+  if (request.method === 'GET' && createLotMatch) {
+    const event = eventByCodeStatement.get(decodeURIComponent(createLotMatch[1]));
+    if (!event) {
+      sendJson(response, 404, { erro: 'Evento nao encontrado.' });
+      return;
+    }
+    sendJson(response, 200, { lotes: lotsByEventStatement.all(event.id).map(lotePublico) });
+    return;
+  }
   if (request.method === 'POST' && createLotMatch) {
     try {
       const eventCode = decodeURIComponent(createLotMatch[1]);
@@ -659,6 +687,10 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/comprovantes') {
+    if (!simulatorEnabled) {
+      sendJson(response, 404, { erro: 'Rota nao encontrada.' });
+      return;
+    }
     try {
       const body = await readJson(request, 7_000_000);
       const orderId = positiveInteger(body.pedido_id);
@@ -679,7 +711,8 @@ const requestListener = async (request, response) => {
         return;
       }
       const receiptId = randomUUID();
-      const filePath = join(receiptsFolder, `${receiptId}.${allowedTypes[mimeType]}`);
+      const fileName = `${receiptId}.${allowedTypes[mimeType]}`;
+      const filePath = join(receiptsFolder, fileName);
       writeFileSync(filePath, file, { flag: 'wx' });
       try {
         const registrado = registrarComprovante(database, {
@@ -689,8 +722,9 @@ const requestListener = async (request, response) => {
           comprovanteId: receiptId,
           nomeOriginal: originalName,
           tipoMime: mimeType,
-          caminho: filePath,
+          caminho: fileName,
           tamanhoBytes: file.length,
+          sha256: createHash('sha256').update(file).digest('hex'),
         });
         sendJson(response, 201, {
           recebido: true,
@@ -725,16 +759,31 @@ const requestListener = async (request, response) => {
   const receiptMatch = url.pathname.match(/^\/admin\/comprovantes\/([a-f0-9-]+)$/);
   if (request.method === 'GET' && receiptMatch) {
     const receipt = receiptByIdStatement.get(receiptMatch[1]);
-    if (!receipt) {
+    if (!receipt || receipt.apagado_em) {
       sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
       return;
+    }
+    const filePath = caminhoDentroDaPasta(receiptsFolder, receipt.caminho);
+    if (!filePath) {
+      sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
+      return;
+    }
+    let conteudo;
+    try {
+      conteudo = readFileSync(filePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        sendJson(response, 404, { erro: 'Comprovante nao encontrado.' });
+        return;
+      }
+      throw error;
     }
     response.writeHead(200, {
       'Content-Type': receipt.tipo_mime,
       'Content-Disposition': `inline; filename="${receipt.nome_original.replaceAll('"', '')}"`,
       'Cache-Control': 'no-store',
     });
-    response.end(readFileSync(receipt.caminho));
+    response.end(conteudo);
     return;
   }
 
@@ -843,7 +892,7 @@ const requestListener = async (request, response) => {
     }
     try {
       const body = await readJson(request);
-      const resultado = processarEntrada(database, {
+      const resultado = await processarEntrada(database, {
         telefone: normalizeText(body.telefone, 30),
         nome: normalizeText(body.nome, 150),
         tipo: normalizeText(body.tipo, 30),
@@ -852,7 +901,11 @@ const requestListener = async (request, response) => {
         timestamp: normalizeText(body.timestamp, 40),
         origem: normalizeText(body.origem, 100) || 'whatsapp',
         evento_codigo: normalizeText(body.evento_codigo, 100).toLowerCase(),
-      });
+        midia_id: normalizeText(body.midia_id, 200),
+        midia_mime: normalizeText(body.midia_mime, 100),
+        midia_sha256: normalizeText(body.midia_sha256, 128),
+        midia_nome: normalizeText(body.midia_nome, 250),
+      }, { pastaComprovantes: receiptsFolder });
       if (resultado.statusCode) {
         sendJson(response, resultado.statusCode, { erro: resultado.erro });
         return;
@@ -893,17 +946,19 @@ const requestListener = async (request, response) => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${internalToken}`,
         },
-        body: JSON.stringify({
+        body: JSON.stringify(montarCorpoSimulador({
           telefone: payload.telefone,
           nome: payload.nome,
-          tipo: 'texto',
           texto: payload.mensagem,
           id_mensagem: payload.id_mensagem,
-          timestamp: new Date().toISOString(),
           origem: payload.origem,
           evento_codigo: payload.evento_codigo,
-          porta_api: port,
-        }),
+          usar_porta_teste: body.usar_porta_teste,
+          porta_api: body.porta_api,
+        }, {
+          porta: port,
+          usarPortaTeste: process.env.USAR_PORTA_TESTE === '1',
+        })),
         signal: AbortSignal.timeout(30_000),
       });
       const responseText = await n8nResponse.text();
@@ -912,6 +967,10 @@ const requestListener = async (request, response) => {
         n8nResult = responseText ? JSON.parse(responseText) : {};
       } catch {
         n8nResult = { erro: 'O n8n nao devolveu JSON.' };
+      }
+      if (n8nResponse.status === 401) {
+        sendJson(response, 502, { erro: 'O n8n recusou o webhook.' });
+        return;
       }
       if (!n8nResponse.ok) {
         sendJson(response, n8nResponse.status >= 400 ? n8nResponse.status : 502, {
@@ -978,6 +1037,34 @@ const requestListener = async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/admin/whatsapp/saidas') {
+    sendJson(response, 200, {
+      ...resumoSaidas(database),
+      envio_ativo: Boolean(envioConfig.ativo),
+      itens: listarSaidasAlerta(database),
+    });
+    return;
+  }
+
+  const reenviarMatch = url.pathname.match(/^\/admin\/whatsapp\/saidas\/(\d+)\/reenviar$/);
+  if (request.method === 'POST' && reenviarMatch) {
+    try {
+      const confirmar = url.searchParams.get('confirmar') === '1';
+      sendJson(response, 200, reenviarSaida(database, Number(reenviarMatch[1]), { confirmar }));
+    } catch (error) {
+      const status = error.codigo === 'NAO_ENCONTRADA'
+        ? 404
+        : error.codigo === 'CONFIRMAR'
+          ? 409
+          : 400;
+      sendJson(response, status, {
+        erro: error.message,
+        ...(error.codigo === 'CONFIRMAR' ? { exige_confirmacao: true } : {}),
+      });
+    }
+    return;
+  }
+
   sendJson(response, 404, {
     erro: 'Rota nao encontrada.',
     rotas: [
@@ -985,6 +1072,7 @@ const requestListener = async (request, response) => {
       'GET /admin',
       'POST /simular-mensagem',
       'POST /admin/eventos',
+      'GET /admin/eventos/:codigo/lotes',
       'POST /admin/eventos/:codigo/lotes',
       'GET /admin/eventos/:codigo/participantes-confirmados',
       'GET /admin/eventos/:codigo/exportar-participantes.csv',
@@ -999,6 +1087,8 @@ const requestListener = async (request, response) => {
       'POST /admin/reservas/expirar',
       'GET /admin/whatsapp/fila',
       'POST /admin/whatsapp/fila/:id/reenfileirar',
+      'GET /admin/whatsapp/saidas',
+      'POST /admin/whatsapp/saidas/:id/reenviar',
       'POST /interno/mensagem',
       'GET /eventos',
       'GET /eventos/:codigo',
@@ -1012,15 +1102,30 @@ const requestListener = async (request, response) => {
 };
 
 const expirationTimer = setInterval(() => {
-  try {
-    expirarReservas(database);
-    reterCorpos(database, retencaoDias());
-    apagarEntregues(database, retencaoDias());
-  } catch (error) {
-    console.error(`Falha ao expirar reservas: ${error.message}`);
-  }
+  rodarRotinas([
+    () => expirarReservas(database),
+    () => {
+      reterCorpos(database, retencaoDias());
+      apagarEntregues(database, retencaoDias());
+    },
+  ], (error) => {
+    console.error(`Falha na rotina periodica: ${error.message}`);
+  });
 }, 60_000);
 expirationTimer.unref();
+
+const pararRetencao = iniciarRetencao(database, { pasta: receiptsFolder });
+
+const pararEnvio = iniciarEnvio(database, {
+  config: envioConfig,
+  enviar: (mensagem) => enviarTexto({
+    base: envioConfig.base,
+    versao: envioConfig.versao,
+    phoneNumberId: envioConfig.phoneNumberId,
+    token: envioConfig.token,
+    ...mensagem,
+  }),
+});
 
 const server = createHttpServer(requestListener);
 const secureServer = tlsCertificatePath && tlsKeyPath
@@ -1041,6 +1146,8 @@ secureServer?.listen(httpsPort, httpsHost, () => {
 
 function closeServer() {
   clearInterval(expirationTimer);
+  pararRetencao();
+  pararEnvio();
   let pendingServers = secureServer ? 2 : 1;
   const afterClose = () => {
     pendingServers -= 1;

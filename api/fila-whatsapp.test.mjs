@@ -13,6 +13,7 @@ import {
   apagarEntregues,
   enfileirar,
   exigirBancoPronto,
+  montarCorpoSimulador,
   processarProxima,
   reenfileirar,
   resumoFila,
@@ -74,7 +75,10 @@ test('assinatura invalida nao entra na fila', async () => {
     }));
     const ignorado = receberEvento(database, status, { signature: assinar(status), appSecret: segredo });
     assert.equal(ignorado.json.ignorado, true);
+    assert.equal(ignorado.json.custos, 1);
     assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM fila_webhook').get().n), 1);
+    assert.equal(Number(database.prepare('SELECT COUNT(*) AS n FROM mensagens_custo').get().n), 1);
+    assert.equal(database.prepare('SELECT billable FROM mensagens_custo').get().billable, null);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });
@@ -411,4 +415,70 @@ test('entrega ao n8n envia o bearer e o gateway exige o token', async () => {
   const code = await new Promise((resolve) => child.on('exit', resolve));
   assert.notEqual(code, 0);
   assert.match(stderr, /API_INTERNAL_TOKEN nao definido/);
+});
+
+test('porta de teste so sai no payload quando o processo de teste pede', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-15T12:00:00.000Z');
+  try {
+    enfileirar(database, [{
+      id_mensagem: 'wamid.porta',
+      telefone: '5511911111111',
+      nome: 'Ana',
+      tipo: 'texto',
+      texto: 'oi',
+      timestamp: agora.toISOString(),
+      corpo: { usar_porta_teste: 1, porta_api: '9', id: 'wamid.porta' },
+    }], { agora });
+    assert.equal(database.prepare(`SELECT corpo FROM fila_webhook WHERE wamid = 'wamid.porta'`).get().corpo.includes('usar_porta_teste'), false);
+    const semFlag = [];
+    await processarProxima(database, {
+      agora,
+      portaApi: '8123',
+      entregar: async (payload) => {
+        semFlag.push(payload);
+        return { status: 500, erro: 'segurar' };
+      },
+    });
+    assert.equal(semFlag[0].porta_api, undefined);
+    assert.equal(semFlag[0].usar_porta_teste, undefined);
+    database.prepare(`UPDATE fila_webhook SET status = 'pendente', proxima_tentativa_em = ? WHERE wamid = 'wamid.porta'`).run(agora.toISOString());
+    const comFlag = [];
+    await processarProxima(database, {
+      agora,
+      portaApi: '8123',
+      usarPortaTeste: true,
+      entregar: async (payload) => {
+        comFlag.push(payload);
+        return { status: 200 };
+      },
+    });
+    assert.equal(comFlag[0].porta_api, '8123');
+    assert.equal(comFlag[0].usar_porta_teste, 1);
+    const simulado = montarCorpoSimulador({
+      telefone: '11999999999',
+      nome: 'Ana',
+      mensagem: 'oi',
+      id_mensagem: 'sim-1',
+      origem: 'simulador',
+      evento_codigo: 'festa',
+      usar_porta_teste: 1,
+      porta_api: '1',
+    }, { porta: '8000', usarPortaTeste: false, agora });
+    assert.equal(simulado.usar_porta_teste, undefined);
+    assert.equal(simulado.porta_api, undefined);
+    const simuladoTeste = montarCorpoSimulador({
+      telefone: '11999999999',
+      nome: 'Ana',
+      mensagem: 'oi',
+      id_mensagem: 'sim-1',
+      usar_porta_teste: 1,
+      porta_api: '1',
+    }, { porta: '8123', usarPortaTeste: true, agora });
+    assert.equal(simuladoTeste.porta_api, '8123');
+    assert.equal(simuladoTeste.usar_porta_teste, 1);
+  } finally {
+    try { database.close(); } catch { /* ja fechado */ }
+    await rm(diretorio, { recursive: true, force: true });
+  }
 });

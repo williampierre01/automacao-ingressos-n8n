@@ -92,3 +92,48 @@ test('a API nao sobe sem ADMIN_TOKEN', async () => {
   assert.notEqual(code, 0);
   assert.match(stderr, /ADMIN_TOKEN nao definido/);
 });
+
+test('API e gateway nao sobem sem token interno ou com menos de 24 caracteres', async () => {
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const admin = 'abcdefghijklmnopqrstuvwx';
+  const curto = 'valor-curto-secreto';
+  assert.ok(curto.length < 24);
+
+  async function subida(script, env) {
+    const child = spawn(process.execPath, [script], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        ...env,
+      },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const code = await new Promise((resolve) => child.on('exit', resolve));
+    return { code, stderr };
+  }
+
+  const apiSem = await subida('api/server.mjs', { ADMIN_TOKEN: admin });
+  assert.notEqual(apiSem.code, 0);
+  assert.match(apiSem.stderr, /API_INTERNAL_TOKEN nao definido/);
+
+  const apiCurto = await subida('api/server.mjs', { ADMIN_TOKEN: admin, API_INTERNAL_TOKEN: curto });
+  assert.notEqual(apiCurto.code, 0);
+  assert.match(apiCurto.stderr, /API_INTERNAL_TOKEN precisa ter pelo menos 24 caracteres/);
+  assert.equal(apiCurto.stderr.includes(curto), false);
+
+  const gatewaySem = await subida('api/whatsapp-gateway.mjs', { META_APP_SECRET: 'segredo-do-gateway' });
+  assert.notEqual(gatewaySem.code, 0);
+  assert.match(gatewaySem.stderr, /API_INTERNAL_TOKEN nao definido/);
+  assert.equal(gatewaySem.stderr.includes('segredo-do-gateway'), false);
+
+  const gatewayCurto = await subida('api/whatsapp-gateway.mjs', {
+    META_APP_SECRET: 'segredo-do-gateway',
+    API_INTERNAL_TOKEN: curto,
+  });
+  assert.notEqual(gatewayCurto.code, 0);
+  assert.match(gatewayCurto.stderr, /API_INTERNAL_TOKEN precisa ter pelo menos 24 caracteres/);
+  assert.equal(gatewayCurto.stderr.includes(curto), false);
+});

@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireSecret, tokensMatch } from './auth.mjs';
 import { readBody, requestBodyError } from './body.mjs';
 import { normalizarWebhook } from './entrada.mjs';
+import { aplicarStatuses } from './custo-whatsapp.mjs';
 import {
   enfileirar,
   exigirBancoPronto,
@@ -13,6 +14,7 @@ import {
   processarProxima,
   retomarProcessando,
 } from './fila-whatsapp.mjs';
+import { emTransacao } from './lotes.mjs';
 import { verifyHubSignature } from './meta-signature.mjs';
 
 const apiFolder = dirname(fileURLToPath(import.meta.url));
@@ -37,10 +39,15 @@ function sendJson(response, statusCode, body) {
 export function abrirBancoGateway(databasePath) {
   if (!existsSync(databasePath)) throw new Error('suba a API primeiro');
   const database = new DatabaseSync(databasePath);
-  database.exec('PRAGMA busy_timeout = 5000');
-  database.exec('PRAGMA journal_mode = WAL');
-  exigirBancoPronto(database);
-  return database;
+  try {
+    database.exec('PRAGMA busy_timeout = 5000');
+    database.exec('PRAGMA journal_mode = WAL');
+    exigirBancoPronto(database);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 export function receberEvento(database, rawBody, {
@@ -59,15 +66,27 @@ export function receberEvento(database, rawBody, {
     return { status: 400, texto: `Requisicao invalida: ${error.message}` };
   }
   const normalizado = normalizarWebhook(json, agora);
-  if (normalizado.mensagens.length === 0) {
-    return { status: 200, json: { recebido: true, ignorado: true } };
+  try {
+    const resultado = emTransacao(database, () => {
+      const custo = aplicarStatuses(database, json, agora);
+      const fila = normalizado.mensagens.length > 0
+        ? enfileirar(database, normalizado.mensagens, { origem: 'whatsapp', eventoCodigo, agora })
+        : { novas: 0 };
+      return { custo, fila };
+    });
+    return {
+      status: 200,
+      json: {
+        recebido: true,
+        ignorado: normalizado.mensagens.length === 0,
+        enfileiradas: resultado.fila.novas,
+        custos: resultado.custo.gravados,
+      },
+    };
+  } catch (error) {
+    console.error(`Falha ao gravar webhook: ${error.message}`);
+    return { status: 500, texto: 'Falha ao gravar o evento.' };
   }
-  const fila = enfileirar(database, normalizado.mensagens, {
-    origem: 'whatsapp',
-    eventoCodigo,
-    agora,
-  });
-  return { status: 200, json: { recebido: true, enfileiradas: fila.novas } };
 }
 
 export function criarGateway({ database, appSecret, verifyToken, eventoCodigo = '' }) {
@@ -132,7 +151,7 @@ export async function entregarAoN8n(mensagem, webhookUrl, token) {
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(mensagem),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(45_000),
   });
   const texto = await response.text();
   let erro = '';
@@ -145,7 +164,12 @@ export async function entregarAoN8n(mensagem, webhookUrl, token) {
   return { status: response.status, erro };
 }
 
-export function iniciarWorker(database, { entregar, portaApi = '8000', intervaloMs = 1000 } = {}) {
+export function iniciarWorker(database, {
+  entregar,
+  portaApi = '8000',
+  usarPortaTeste = false,
+  intervaloMs = 1000,
+} = {}) {
   retomarProcessando(database);
   let parado = false;
   let timer = null;
@@ -157,6 +181,7 @@ export function iniciarWorker(database, { entregar, portaApi = '8000', intervalo
         entregar,
         maximo: maxTentativas(),
         portaApi,
+        usarPortaTeste,
       });
       if (resultado.processou) espera = 0;
     } catch (error) {
@@ -202,6 +227,7 @@ if (executadoDireto()) {
   const eventoCodigo = process.env.WHATSAPP_EVENTO_CODIGO || '';
   const pararWorker = iniciarWorker(database, {
     portaApi,
+    usarPortaTeste: process.env.USAR_PORTA_TESTE === '1',
     entregar: (mensagem) => entregarAoN8n(mensagem, webhook, internalToken),
   });
   const server = criarGateway({ database, appSecret, verifyToken, eventoCodigo });

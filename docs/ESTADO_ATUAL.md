@@ -2,6 +2,32 @@
 
 Revisão em 2026-10-12, só leitura de código e docs. **Não confirmei runtime** (API, n8n e gateway não foram exercitados nesta fase). Evidência = trechos versionados. Segredos de `.env` não foram abertos nem impressos.
 
+## Envio WhatsApp (2026-10-21)
+
+Onde este trecho divergir da entrada unificada de 2026-10-15, vale este.
+
+O schema nasce na versao 3. `migrar()` leva um banco antigo ate a 3, com um backup `backup-pre-migracao-<timestamp>` ao lado do arquivo. Esse backup e so o SQLite, sem as imagens de `data/comprovantes/`. A migracao conta `mensagens_entrada`, `mensagens_saida` e `fila_webhook` e aborta se a contagem divergir ou se o banco nao tiver caminho de arquivo. O gateway exige `user_version >= 3` e, abaixo disso, recusa subir com `suba a API primeiro`.
+
+`statuses[]` nao entra na fila nem no n8n. Depois do HMAC e antes do 200, a mesma transacao atualiza a saida e insere `mensagens_custo`. Webhook misto enfileira a mensagem e aplica o status. `wamid` desconhecido grava o custo se o `biz_opaque_callback_data` achar a linha; se nao achar, grava o custo mesmo assim e nao inventa saida. Falha de banco responde 500. `billable` nulo significa que a Meta nao mandou o campo. Nao gravamos o corpo do webhook nem o telefone nessa tabela. `status_meta` so avanca `sent < delivered < read`. `failed` da Meta, depois do aceite, deixa `status=enviada` e preenche `status_meta` e `erro_meta`.
+
+O envio roda na API (`api/graph-whatsapp.mjs`, `api/envio-whatsapp.mjs`). Sem `META_ACCESS_TOKEN` a API sobe e o ciclo fica desligado. Com token, exige 24 caracteres, `META_PHONE_NUMBER_ID` e `META_GRAPH_VERSION`. A versao vigente da Graph **nao foi confirmada** (a documentacao oficial respondeu 403 e a busca nao trouxe a versao); vazia desliga o envio em vez de cravar um numero. `META_GRAPH_BASE_URL` http so vale em `127.0.0.1`. Dois listeners nao duplicam o POST: a reivindicacao e um `UPDATE` condicional em `BEGIN IMMEDIATE`. A ordem por telefone segura a saida seguinte enquanto houver anterior em `pendente_envio`, `enviando` ou `envio_incerto`. `falhou` e `fora_da_janela` nao seguram e aparecem no admin. Reenvio de `falhou` ou `envio_incerto` so com `confirmar=1`. `fora_da_janela` nao reenvia. A janela de 24 h usa a ultima `mensagens_entrada.recebida_em` daquele telefone, no formato ja guardado, sem mexer no nono digito.
+
+O worker espera o n8n 45 s. O no HTTP do fluxo 04 espera 30 s e chama `http://127.0.0.1:8000/interno/mensagem`, ou a porta do corpo so com `usar_porta_teste=1`. O gateway de producao e o `/simular-mensagem` ignoram esse par se ele vier de fora. O processo de teste (`USAR_PORTA_TESTE=1`) e o unico que coloca o par de novo, inclusive no simulador, para os scripts nao escreverem no banco da porta 8000. O fluxo foi republicado em 2026-10-21 com o n8n fechado e o n8n foi reiniciado em seguida.
+
+Imagem e documento procuram o pedido daquele telefone e evento em `aguardando_pagamento` ou, se nao houver, o expirado mais recente. Sem pedido, a resposta diz que nao ha reserva e nada e baixado. Com pedido, o download (dois GETs, 20 s no total) acontece dentro da requisicao do worker, fora da transacao. Nao baixa em segundo plano: o 500 e o que faz a fila reagendar. Erro permanente grava a entrada e responde 200. Erro de rede, timeout ou token ausente responde 500 e nao grava a entrada. O arquivo fica em `data/comprovantes/{uuid}.{ext}`. `GET /admin/comprovantes/:id` so le se o caminho resolvido continuar nessa pasta. `POST /comprovantes` responde 404 sem `SIMULADOR_ATIVO=1`.
+
+A retencao dos comprovantes tem timer e try proprios. Aprovado: apaga o arquivo N dias depois de `data_evento` (padrao 30). Recusado, expirado ou cancelado: 7 dias depois de `atualizado_em`. Em analise ou aguardando, fica. A linha mantem id, sha256, mime e tamanho e preenche `apagado_em`. Arquivo ja ausente nao impede a marcacao. Caminho que saia da pasta nao e apagado.
+
+O catalogo publico de lote devolve preco e `vagas` (`aberto`, `fechado` ou `esgotado`). Nao devolve quantidades nem `disponivel`. O admin continua vendo os numeros. `vagas=fechado` cobre lote futuro ou pausado, para nao chama-lo de esgotado.
+
+O HTTPS, se `API_HTTPS_HOST` vier vazio, escuta em `127.0.0.1`. O listener HTTPS responde 404 em `/interno/*` e em `POST /atendimentos`. Os fluxos 02 e 03 usam o HTTP `127.0.0.1:8000`, nao a 8443. `work/https/https.env` ja gerado nao foi lido; se ainda tiver `0.0.0.0`, continua assim ate rodar `scripts/configurar-https-local.ps1` de novo.
+
+Nao ha LLM nesta tarefa. A restricao ao assunto do evento passa a importar quando existir modelo interpretando texto livre.
+
+`scripts/testar-envio.ps1` sobe Graph falso, API e gateway em portas livres e o n8n real. Conferiu: texto assinado chega a `enviada` com o wamid do falso; o mesmo wamid de entrada nao gera segunda saida; `delivered` grava uma linha de custo; imagem de pedido em aberto vira arquivo na pasta temporaria e o pedido fica em analise; HMAC invalido continua 401; o n8n escuta so em `127.0.0.1` e o processo nao tem `META_ACCESS_TOKEN`. `node --test` ficou em 82. `testar-entrada.ps1` ficou em 18. `testar-lotes.ps1` ficou em 9.
+
+O que so a Meta real prova, e nao foi provado: aceite do token e do phone number id, eco de `biz_opaque_callback_data`, janela aplicada pela Meta, valores reais de pricing, atraso de delivered/read, URL efemera de midia, teto de 5 destinatarios do numero de teste e o catalogo de erros. Um 5xx com corpo e sem wamid pode ja ter sido aceito e duplicaria no retry; nesse caso o codigo marca `envio_incerto` quando nao ha status HTTP ou o 2xx vem sem wamid. Reenvio manual pode duplicar. O backup da migracao nao inclui imagens.
+
 ## Entrada unificada (2026-10-15)
 
 O WhatsApp e o simulador chegam na venda pelo mesmo caminho.
@@ -9,7 +35,7 @@ O WhatsApp e o simulador chegam na venda pelo mesmo caminho.
 1. O gateway valida o HMAC, grava uma linha por mensagem em `fila_webhook` e responde 200. `statuses[]` não entra na fila. Se `user_version` for menor que 2, o gateway recusa subir com `suba a API primeiro`.
 2. O worker entrega a mensagem mais antiga de cada telefone ao webhook `whatsapp-mensagens`, com `Authorization: Bearer` do `API_INTERNAL_TOKEN` e timeout de 30 s. 404, 408, 425, 429, 5xx, timeout e erro de rede esperam, com backoff até 300 s e no máximo `FILA_MAX_TENTATIVAS` (padrão 30). Os outros 4xx marcam `falhou` na hora. Se a entrega processou uma linha, o próximo ciclo é imediato; o intervalo de 1 s só vale com a fila vazia. O admin lista as falhas, a contagem de pendentes e processando e a idade do pendente mais antigo (alerta acima de 300 s). `POST /admin/whatsapp/fila/:id/reenfileirar` devolve o item; se já houver mensagem mais nova do mesmo telefone entregue, responde aviso e só segue com `confirmar=1`. O corpo bruto de uma falha some depois de `FILA_RETENCAO_DIAS` (padrão 7). Linha `entregue` mais velha que esse prazo é apagada. `mensagens_entrada` e `mensagens_saida` ficam.
 3. O fluxo 04 repassa o cabeçalho `Authorization` recebido para `POST /interno/mensagem` (timeout 15 s) e devolve o JSON. Não há `$env` nem lógica de venda no n8n. `saveDataSuccessExecution=none`, `saveDataErrorExecution=none` e `saveManualExecutions=false`. O n8n 2.34.6 ainda grava a execução de sucesso e só preenche `deletedAt`, com o corpo no banco. `scripts/iniciar-n8n.ps1` cria o trigger `limpar_execucao_apagada`, que apaga essa linha e o corpo, e ao subir apaga as que já estavam marcadas. Não foi reproduzida uma execução com status de erro: o nó HTTP usa `continueErrorOutput` e `neverError`, e JSON inválido ou gzip responde erro sem gravar linha. Não ficou provado se o trigger cobriria esse caso.
-4. A API registra o `wamid`, roda `processarMensagem` e grava `mensagens_saida` com status `pendente_envio` na mesma transação. Repetição responde 200 sem processar de novo. Sem token ou com token errado, responde 401 e não grava mensagem nem pedido. Evento sem vendas abertas responde 200, estado `vendas_fechadas` e saída `pendente_envio`. Evento inexistente responde 422 (`Evento X nao encontrado. Verifique WHATSAPP_EVENTO_CODIGO.`) e a fila marca `falhou` com esse texto. Imagem e documento respondem que o comprovante por ali ainda não está disponível. Áudio, figurinha e localização respondem que só texto é lido. Reação registra o `wamid` e não responde. O envio pela Cloud API fica para a 4b.
+4. A API registra o `wamid`, roda `processarMensagem` e grava `mensagens_saida` com status `pendente_envio` na mesma transação. O envio e o comprovante por imagem estão na seção de 2026-10-21.
 
 `POST /simular-mensagem` monta esse JSON e espera o n8n. Continua exigindo `SIMULADOR_ATIVO=1`. `POST /atendimentos` permanece para os fluxos 02 e 03.
 
@@ -47,17 +73,17 @@ Isso executa `import:workflow --input=workflows/04-webhook-whatsapp-simulado.jso
 | Peça | Por quê |
 | --- | --- |
 | Fluxos 01–03 | Trigger manual ou form n8n; dados fictícios. |
-| Fluxo 04 | O JSON no git nasce `active: false`. A instância local precisa do `publicar-fluxo-04.ps1` e de um reinício do n8n. A saída para a Cloud API ainda é `pendente_envio`. |
+| Fluxo 04 | O JSON no git nasce `active: false`. A instância local foi republicada em 2026-10-21. O envio da resposta está na API, não no n8n. |
 | `POST /simular-mensagem` | Encaminha o JSON normalizado ao n8n e não chama `processarMensagem` por fora. Sem o fluxo 04 publicado, a venda não grava. |
-| Pix do evento seed | Chave `PIX-DEMONSTRACAO-NAO-PAGAR` / tipo `demonstracao` (`server.mjs` L101–106, L578). |
-| “Integração WhatsApp” no README | Checklist ainda aberto. Gateway não envia resposta à Cloud API. Não há download de mídia. |
+| Pix do evento seed | Chave `PIX-DEMONSTRACAO-NAO-PAGAR` / tipo `demonstracao`. |
+| “Integração WhatsApp” no README | O checklist segue aberto porque não há app nem número reais. O envio local contra Graph falso está na seção de 2026-10-21. |
 | Google Sheets (`docs/arquitetura.md`, `docs/decisoes.md`) | Destino antigo; o código grava SQLite/CSV. |
-| OCR, IA, embeddings, `mensagens_custo`, conciliação OFX, BR Code | Ausentes do repositório. |
+| OCR, IA, embeddings, conciliação OFX, BR Code | Ausentes do repositório. `mensagens_custo` existe desde a versão 3. |
 | Docker `compose.yaml` | Só n8n `latest`, sem API; caminho principal é Node portátil. |
 
 ## O que está quebrado ou incompleto (impacto prático)
 
-- **Envio real e mídia.** A resposta fica `pendente_envio`. Download de comprovante pelo WhatsApp fica para a 4b. Imagem e documento já recebem texto provisório.
+- **Meta real.** O envio e a mídia foram provados com Graph falso local. Token, phone number id, eco do callback, janela da Meta, pricing, URL efêmera e catálogo de erros não foram provados. Ver a seção de 2026-10-21.
 - **Check-in é por CPF/RG/protocolo**, não por nome normalizado (regra de negócio alvo: lista por **nome**).
 - **Estados do pedido** no schema (`iniciado`, `aguardando_pagamento`, `concluido`…) ≠ estados alvo (`aguardando_nomes`, `em_validacao`, `revisao_manual`…).
 - **Workflows sem retry/onError** (grep zerado). 409 de `id_mensagem` falha o webhook em vez de 200 idempotente.
@@ -100,7 +126,7 @@ As citações de linha da revisão de 2026-10-12 podem ter deslocado depois dest
 - `API_INTERNAL_TOKEN` usa a mesma comparação do admin. Sem ele, ou com menos de 24 caracteres, a API não sobe.
 - Testes: `node --test`.
 
-**Risco do HTTPS em rede compartilhada.** O `.env.example` usa `API_HTTPS_HOST=127.0.0.1`. O código, se a variável vier vazia, e o `scripts/configurar-https-local.ps1` ainda gravam `0.0.0.0`. `scripts/iniciar-api-https.ps1` avisa quando o valor efetivo é `0.0.0.0`: quem estiver na mesma rede alcança a porta, e `POST /atendimentos` e `POST /comprovantes` ficam abertos. Admin e listagens continuam exigindo `ADMIN_TOKEN`.
+**Risco do HTTPS em rede compartilhada.** O padrão do código e de `scripts/configurar-https-local.ps1` é `127.0.0.1`. O listener HTTPS responde 404 em `/interno/*` e em `POST /atendimentos`. `POST /comprovantes` responde 404 sem `SIMULADOR_ATIVO=1`. Um `work/https/https.env` gerado antes pode continuar em `0.0.0.0` até rodar o script de novo. `scripts/iniciar-api-https.ps1` avisa quando o valor efetivo é `0.0.0.0`.
 
 ## Lotes e preços (2026-10-14)
 

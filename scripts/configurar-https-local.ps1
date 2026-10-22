@@ -69,7 +69,7 @@ Copy-Item -LiteralPath $rootCertificate -Destination $localRootCertificate -Forc
 Copy-Item -LiteralPath $rootCertificate -Destination (Join-Path $httpsFolder 'rootCA.crt') -Force
 
 $settings = @(
-    "API_HTTPS_HOST=0.0.0.0"
+    "API_HTTPS_HOST=127.0.0.1"
     "API_HTTPS_PORT=8443"
     "API_TLS_CERT_PATH=$certificatePath"
     "API_TLS_KEY_PATH=$keyPath"
@@ -79,8 +79,8 @@ Set-Content -LiteralPath (Join-Path $httpsFolder 'https.env') -Value $settings -
 
 Write-Host ''
 Write-Host 'HTTPS local configurado.' -ForegroundColor Green
-Write-Host "Computador: https://localhost:8443/admin"
-Write-Host "Celular:    https://${LocalIp}:8443/admin"
+Write-Host 'Computador: https://127.0.0.1:8443/admin'
+Write-Host 'O bind padrao e 127.0.0.1. Para abrir no celular, altere API_HTTPS_HOST no https.env.'
 Write-Host "Certificado para o celular: $(Join-Path $httpsFolder 'rootCA.crt')"
 Write-Host 'Nunca compartilhe o arquivo rootCA-key.pem.' -ForegroundColor Yellow
 if (-not $trustInstalled) {

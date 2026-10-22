@@ -4,6 +4,70 @@ function iso(agora) {
   return (agora instanceof Date ? agora : new Date(agora)).toISOString();
 }
 
+function corpoSemPortaDeTeste(corpo) {
+  if (!corpo || typeof corpo !== 'object' || Array.isArray(corpo)) return {};
+  const copia = { ...corpo };
+  delete copia.usar_porta_teste;
+  delete copia.porta_api;
+  return copia;
+}
+
+function camposMidia(corpo) {
+  let json = {};
+  try {
+    json = typeof corpo === 'string' ? JSON.parse(corpo || '{}') : (corpo || {});
+  } catch {
+    json = {};
+  }
+  const midia = json.image || json.document || {};
+  if (!midia.id) return {};
+  return {
+    midia_id: String(midia.id),
+    midia_mime: String(midia.mime_type || ''),
+    midia_sha256: String(midia.sha256 || ''),
+    midia_nome: String(midia.filename || ''),
+  };
+}
+
+export function montarPayloadEntrega(linha, { portaApi = '', usarPortaTeste = false } = {}) {
+  const payload = {
+    telefone: linha.telefone,
+    nome: linha.nome,
+    tipo: linha.tipo,
+    texto: linha.texto,
+    id_mensagem: linha.wamid,
+    timestamp: linha.timestamp_mensagem,
+    origem: linha.origem,
+    evento_codigo: linha.evento_codigo,
+    ...camposMidia(linha.corpo),
+  };
+  const porta = String(portaApi ?? '');
+  if (usarPortaTeste && /^\d+$/.test(porta)) {
+    payload.porta_api = porta;
+    payload.usar_porta_teste = 1;
+  }
+  return payload;
+}
+
+export function montarCorpoSimulador(entrada, { porta = '', usarPortaTeste = false, agora = new Date() } = {}) {
+  const corpo = {
+    telefone: String(entrada.telefone ?? ''),
+    nome: String(entrada.nome ?? ''),
+    tipo: 'texto',
+    texto: String(entrada.texto ?? entrada.mensagem ?? ''),
+    id_mensagem: String(entrada.id_mensagem ?? ''),
+    timestamp: entrada.timestamp || iso(agora),
+    origem: String(entrada.origem ?? 'simulador'),
+    evento_codigo: String(entrada.evento_codigo ?? ''),
+  };
+  const portaTexto = String(porta ?? '');
+  if (usarPortaTeste && /^\d+$/.test(portaTexto)) {
+    corpo.porta_api = portaTexto;
+    corpo.usar_porta_teste = 1;
+  }
+  return corpo;
+}
+
 export function maxTentativas(env = process.env) {
   const valor = Number(env.FILA_MAX_TENTATIVAS ?? 30);
   return Number.isInteger(valor) && valor > 0 ? valor : 30;
@@ -21,7 +85,7 @@ export function atrasoMs(tentativas) {
 
 export function exigirBancoPronto(database) {
   const versao = Number(database.prepare('PRAGMA user_version').get().user_version);
-  if (versao < 2) {
+  if (versao < 3) {
     throw new Error('suba a API primeiro');
   }
 }
@@ -50,7 +114,7 @@ export function enfileirar(database, mensagens, { origem = 'whatsapp', eventoCod
         String(mensagem.timestamp ?? momento),
         origem,
         String(eventoCodigo ?? ''),
-        JSON.stringify(mensagem.corpo ?? {}),
+        JSON.stringify(corpoSemPortaDeTeste(mensagem.corpo)),
         momento,
         momento,
         momento,
@@ -246,20 +310,11 @@ export async function processarProxima(database, {
   maximo = maxTentativas(),
   agora = new Date(),
   portaApi = '8000',
+  usarPortaTeste = false,
 } = {}) {
   const linha = reivindicar(database, agora);
   if (!linha) return { processou: false };
-  const payload = {
-    telefone: linha.telefone,
-    nome: linha.nome,
-    tipo: linha.tipo,
-    texto: linha.texto,
-    id_mensagem: linha.wamid,
-    timestamp: linha.timestamp_mensagem,
-    origem: linha.origem,
-    evento_codigo: linha.evento_codigo,
-    porta_api: String(portaApi),
-  };
+  const payload = montarPayloadEntrega(linha, { portaApi, usarPortaTeste });
   try {
     const resposta = await entregar(payload);
     const status = Number(resposta?.status ?? 0);

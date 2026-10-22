@@ -19,7 +19,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ 'http://127.0.0.1:' + (/^\\d+$/.test(String(($json.body || {}).porta_api || '')) ? String($json.body.porta_api) : '8000') + '/interno/mensagem' }}",
+        "url": "={{ (Number(($json.body || {}).usar_porta_teste) === 1 && /^\\d+$/.test(String(($json.body || {}).porta_api || ''))) ? ('http://127.0.0.1:' + String($json.body.porta_api) + '/interno/mensagem') : 'http://127.0.0.1:8000/interno/mensagem' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -33,7 +33,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {
-          "timeout": 15000,
+          "timeout": 30000,
           "response": {
             "response": {
               "fullResponse": true,

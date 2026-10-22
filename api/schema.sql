@@ -1,3 +1,5 @@
+-- DDL da versao 3. O PRAGMA user_version e aplicado por migrar(), porque este
+-- arquivo tambem roda em bancos antigos.
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
@@ -140,7 +142,9 @@ CREATE TABLE IF NOT EXISTS comprovantes (
   tipo_mime TEXT NOT NULL,
   caminho TEXT NOT NULL,
   tamanho_bytes INTEGER NOT NULL,
-  recebido_em TEXT NOT NULL
+  sha256 TEXT,
+  recebido_em TEXT NOT NULL,
+  apagado_em TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_eventos_status ON eventos(status);
@@ -181,7 +185,15 @@ CREATE TABLE IF NOT EXISTS mensagens_saida (
   wamid TEXT NOT NULL REFERENCES mensagens_entrada(wamid),
   texto TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pendente_envio',
-  criada_em TEXT NOT NULL
+  criada_em TEXT NOT NULL,
+  wamid_saida TEXT,
+  tentativas INTEGER NOT NULL DEFAULT 0,
+  proxima_tentativa_em TEXT,
+  ultimo_erro TEXT NOT NULL DEFAULT '',
+  enviada_em TEXT,
+  atualizado_em TEXT,
+  status_meta TEXT,
+  erro_meta TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fila_webhook (
@@ -204,4 +216,23 @@ CREATE TABLE IF NOT EXISTS fila_webhook (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mensagens_saida_wamid ON mensagens_saida(wamid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mensagens_saida_wamid_saida
+  ON mensagens_saida(wamid_saida) WHERE wamid_saida IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mensagens_saida_status_proxima
+  ON mensagens_saida(status, proxima_tentativa_em);
 CREATE INDEX IF NOT EXISTS idx_fila_telefone_status ON fila_webhook(telefone, status, id);
+
+CREATE TABLE IF NOT EXISTS mensagens_custo (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wamid_saida TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
+  billable INTEGER,
+  pricing_model TEXT,
+  pricing_type TEXT,
+  category TEXT,
+  timestamp_meta TEXT,
+  erro_codigo TEXT,
+  erro_titulo TEXT,
+  recebido_em TEXT NOT NULL,
+  UNIQUE (wamid_saida, status)
+);

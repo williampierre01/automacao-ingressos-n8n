@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TEXTO_ARQUIVO, TEXTO_SO_TEXTO, TEXTO_VENDAS_FECHADAS, normalizarWebhook, processarEntrada } from './entrada.mjs';
+import { TEXTO_SEM_RESERVA, TEXTO_SO_TEXTO, TEXTO_VENDAS_FECHADAS, normalizarWebhook, processarEntrada } from './entrada.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -105,7 +105,7 @@ test('audio, figurinha e localizacao nao entram na venda', async () => {
   const { database, diretorio } = await banco();
   try {
     for (const [tipo, id] of [['audio', 'wamid.audio'], ['figurinha', 'wamid.figurinha'], ['localizacao', 'wamid.local']]) {
-      const resultado = processarEntrada(database, {
+      const resultado = await processarEntrada(database, {
         telefone: '11988887777',
         nome: 'Ana',
         tipo,
@@ -115,7 +115,7 @@ test('audio, figurinha e localizacao nao entram na venda', async () => {
       });
       assert.equal(resultado.resposta, TEXTO_SO_TEXTO);
     }
-    const imagem = processarEntrada(database, {
+    const imagem = await processarEntrada(database, {
       telefone: '11988887777',
       nome: 'Ana',
       tipo: 'imagem',
@@ -123,7 +123,7 @@ test('audio, figurinha e localizacao nao entram na venda', async () => {
       id_mensagem: 'wamid.img',
       origem: 'teste',
     });
-    assert.equal(imagem.resposta, TEXTO_ARQUIVO);
+    assert.equal(imagem.resposta, TEXTO_SEM_RESERVA);
     assert.equal(contar(database, 'pedidos'), 0);
     assert.equal(contar(database, 'mensagens_saida'), 4);
     assert.equal(database.prepare(`SELECT status FROM mensagens_saida LIMIT 1`).get().status, 'pendente_envio');
@@ -145,21 +145,21 @@ test('queda no meio nao grava e o retry processa uma unica vez', async () => {
     evento_codigo: 'evento-demonstracao',
   };
   try {
-    assert.throws(() => processarEntrada(database, entrada, {
+    await assert.rejects(processarEntrada(database, entrada, {
       antesDeConfirmar() { throw new Error('queda'); },
     }), /queda/);
     assert.equal(contar(database, 'mensagens_entrada'), 0);
     assert.equal(contar(database, 'mensagens_saida'), 0);
     assert.equal(contar(database, 'conversas'), 0);
 
-    const primeira = processarEntrada(database, entrada);
+    const primeira = await processarEntrada(database, entrada);
     assert.equal(primeira.duplicada, false);
     assert.match(primeira.resposta, /Quantos ingressos/);
     assert.equal(contar(database, 'mensagens_entrada'), 1);
     assert.equal(contar(database, 'mensagens_saida'), 1);
     assert.equal(contar(database, 'conversas'), 1);
 
-    const repetida = processarEntrada(database, entrada);
+    const repetida = await processarEntrada(database, entrada);
     assert.equal(repetida.duplicada, true);
     assert.equal(repetida.resposta, undefined);
     assert.equal(contar(database, 'mensagens_saida'), 1);
@@ -173,7 +173,7 @@ test('queda no meio nao grava e o retry processa uma unica vez', async () => {
 test('reacao registra o wamid e nao responde', async () => {
   const { database, diretorio } = await banco();
   try {
-    const primeira = processarEntrada(database, {
+    const primeira = await processarEntrada(database, {
       telefone: '11944443333',
       nome: 'Ana',
       tipo: 'reacao',
@@ -188,7 +188,7 @@ test('reacao registra o wamid e nao responde', async () => {
     assert.equal(contar(database, 'mensagens_entrada'), 1);
     assert.equal(contar(database, 'mensagens_saida'), 0);
     assert.equal(contar(database, 'pedidos'), 0);
-    const repetida = processarEntrada(database, {
+    const repetida = await processarEntrada(database, {
       telefone: '11944443333',
       nome: 'Ana',
       tipo: 'reacao',
@@ -209,7 +209,7 @@ test('vendas fechadas respondem texto e evento inexistente devolve 422', async (
   const { database, diretorio } = await banco();
   try {
     database.prepare(`UPDATE eventos SET status = 'vendas_pausadas' WHERE codigo = 'evento-demonstracao'`).run();
-    const fechado = processarEntrada(database, {
+    const fechado = await processarEntrada(database, {
       telefone: '11955554444',
       nome: 'Ana',
       tipo: 'texto',
@@ -224,7 +224,7 @@ test('vendas fechadas respondem texto e evento inexistente devolve 422', async (
     assert.equal(database.prepare(`SELECT status FROM mensagens_saida WHERE wamid = 'wamid.fechado'`).get().status, 'pendente_envio');
     assert.equal(contar(database, 'pedidos'), 0);
 
-    const ausente = processarEntrada(database, {
+    const ausente = await processarEntrada(database, {
       telefone: '11955554444',
       nome: 'Ana',
       tipo: 'texto',

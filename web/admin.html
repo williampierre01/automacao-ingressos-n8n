@@ -120,6 +120,14 @@
     </section>
 
     <section class="card">
+      <h2>Envio para o WhatsApp</h2>
+      <p>Respostas que falharam, ficaram fora da janela ou com envio incerto.</p>
+      <p id="outbox-summary"></p>
+      <p id="outbox-alert" class="badge" hidden></p>
+      <div id="outbox-list">Carregando…</div>
+    </section>
+
+    <section class="card">
       <h2>Check-in na entrada</h2>
       <form id="check-in-form">
         <label>Evento<select name="evento" id="check-in-event-select" required></select></label>
@@ -264,6 +272,61 @@
         }
         if (!response.ok) throw new Error(result.erro);
         await refreshQueue();
+      } catch (error) {
+        alert(error.message);
+        button.disabled = false;
+      }
+    });
+
+    async function refreshOutbox() {
+      const response = await adminFetch('/admin/whatsapp/saidas');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.erro);
+      const pendentes = Number(result.pendente_envio || 0);
+      document.querySelector('#outbox-summary').textContent = result.envio_ativo
+        ? `${pendentes} pendente(s) de envio.`
+        : `${pendentes} pendente(s) de envio. O envio esta desligado.`;
+      const alerta = document.querySelector('#outbox-alert');
+      const falhou = Number(result.falhou || 0);
+      const fora = Number(result.fora_da_janela || 0);
+      if (falhou > 0 || fora > 0) {
+        alerta.hidden = false;
+        alerta.textContent = `${falhou} falhou, ${fora} fora da janela.`;
+      } else {
+        alerta.hidden = true;
+        alerta.textContent = '';
+      }
+      const lista = document.querySelector('#outbox-list');
+      const itens = result.itens || [];
+      lista.innerHTML = itens.map((item) => `
+        <article class="event">
+          <strong>${escapeHtml(item.status)} · ${escapeHtml(item.telefone)}</strong>
+          <span>${escapeHtml(item.ultimo_erro || item.erro_meta || 'sem detalhe')}</span>
+          <div class="event-actions">
+            ${item.status === 'fora_da_janela' ? '' : `<button type="button" data-reenviar="${item.id}">Reenviar</button>`}
+          </div>
+        </article>
+      `).join('') || 'Nenhum alerta de envio.';
+    }
+
+    document.querySelector('#outbox-list').addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-reenviar]');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        const base = `/admin/whatsapp/saidas/${button.dataset.reenviar}/reenviar`;
+        let response = await adminFetch(base, { method: 'POST' });
+        let result = await response.json();
+        if (result.exige_confirmacao) {
+          if (!window.confirm(result.erro || 'Reenviar pode duplicar a mensagem na tela do cliente.')) {
+            button.disabled = false;
+            return;
+          }
+          response = await adminFetch(`${base}?confirmar=1`, { method: 'POST' });
+          result = await response.json();
+        }
+        if (!response.ok) throw new Error(result.erro);
+        await refreshOutbox();
       } catch (error) {
         alert(error.message);
         button.disabled = false;
@@ -451,6 +514,7 @@
     refreshPayments().catch((error) => { paymentList.textContent = error.message; });
     refreshViradas().catch((error) => { lotAlert.hidden = false; lotAlertList.textContent = error.message; });
     refreshQueue().catch((error) => { queueList.textContent = error.message; });
+    refreshOutbox().catch((error) => { document.querySelector('#outbox-list').textContent = error.message; });
   </script>
 </body>
 </html>

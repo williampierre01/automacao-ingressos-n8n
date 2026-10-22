@@ -11,7 +11,7 @@ Projeto de aprendizagem para criar uma automacao gratuita que recebe uma convers
 - [x] Primeiro fluxo de simulacao no n8n
 - [x] API local com banco SQLite
 - [x] Exportacao local compativel com Excel
-- [ ] Integracao com o WhatsApp Cloud API
+- [ ] Integracao com o WhatsApp Cloud API (o envio e o comprovante por imagem rodam na API contra um Graph local; app e numero reais da Meta nao foram configurados)
 - [ ] Testes completos
 
 ## Caminho da automacao
@@ -69,7 +69,7 @@ O script abre uma janela para o n8n e outra para a API. As janelas devem permane
 
 O arquivo `.env`, as credenciais, o banco SQLite e os dados recebidos nunca devem ser enviados ao GitHub.
 
-O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN` no processo. O fluxo pede para nao gravar execucao bem-sucedida nem execucao com erro (`saveDataSuccessExecution=none`, `saveDataErrorExecution=none`). O n8n 2.34.6 ainda cria a linha de sucesso e o corpo e so marca `deletedAt`; o script apaga essa linha ao subir e, em cada inicializacao, apaga as que ja estavam marcadas, para o cabecalho e a mensagem nao permanecerem. Nao foi possivel provocar uma execucao com status de erro neste fluxo: falha da API cai no ramo tratado do no HTTP, e JSON invalido ou gzip falham antes de existir linha. Por isso nao ficou provado se uma execucao com erro seria apagada na hora. `EXECUTIONS_DATA_PRUNE=true` e `EXECUTIONS_DATA_MAX_AGE=72` continuam como rede de seguranca.
+O fluxo 04 nao le segredo do ambiente. O gateway e o simulador enviam `Authorization: Bearer` ao webhook, e o no HTTP repassa esse cabecalho para a API. `scripts/iniciar-n8n.ps1` sobe o n8n so em `127.0.0.1` e nao coloca `API_INTERNAL_TOKEN`, `ADMIN_TOKEN`, `META_APP_SECRET` nem `META_ACCESS_TOKEN` no processo. O fluxo pede para nao gravar execucao bem-sucedida nem execucao com erro (`saveDataSuccessExecution=none`, `saveDataErrorExecution=none`). O n8n 2.34.6 ainda cria a linha de sucesso e o corpo e so marca `deletedAt`; o script apaga essa linha ao subir e, em cada inicializacao, apaga as que ja estavam marcadas, para o cabecalho e a mensagem nao permanecerem. Nao foi possivel provocar uma execucao com status de erro neste fluxo: falha da API cai no ramo tratado do no HTTP, e JSON invalido ou gzip falham antes de existir linha. Por isso nao ficou provado se uma execucao com erro seria apagada na hora. `EXECUTIONS_DATA_PRUNE=true` e `EXECUTIONS_DATA_MAX_AGE=72` continuam como rede de seguranca.
 
 Para importar e publicar o fluxo 04 sem a interface:
 
@@ -128,17 +128,23 @@ Na secao **Check-in na entrada**, procure o participante pelo CPF, RG ou protoco
 
 ## Webhook para mensagens externas
 
-O fluxo `04 - Webhook de WhatsApp simulado` prepara a entrada que futuramente sera usada pelo WhatsApp. Depois de publicar o fluxo no n8n, teste com:
+O fluxo `04 - Webhook de WhatsApp simulado` encaminha o corpo ao `POST /interno/mensagem`. A URL fixa e `http://127.0.0.1:8000/interno/mensagem`. A porta do corpo so vale com `usar_porta_teste=1`, e esse par so sai do worker ou do simulador quando o processo de teste define `USAR_PORTA_TESTE=1`. Depois de mudar o JSON, publique com o n8n fechado:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\testar-webhook.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publicar-fluxo-04.ps1
 ```
 
-Mais detalhes estao em `docs/webhook-local.md`.
+O teste antigo do webhook continua em `docs/webhook-local.md`.
 
-## Gateway publico de testes
+## Gateway e envio
 
-Para a futura verificacao da Meta, o projeto possui um gateway isolado na porta 8001. Ele expoe somente `/whatsapp-webhook`, valida o token de configuracao e encaminha mensagens ao fluxo 04. O token privado fica em `work/whatsapp/verify-token.txt` e nao deve ser enviado ao GitHub.
+O gateway em `127.0.0.1:8001` expoe `/whatsapp-webhook`. O GET de verificacao le `work/whatsapp/verify-token.txt`. O POST exige HMAC do corpo bruto. Mensagem entra na fila; `statuses[]` atualiza a saida e grava `mensagens_custo` na mesma transacao, sem passar pelo n8n. O fluxo 04 chama `POST /interno/mensagem` em `http://127.0.0.1:8000`, ou na porta de teste so quando o processo de teste envia `usar_porta_teste=1`. O timeout desse no e 30 s. O worker espera o n8n por 45 s.
+
+A resposta sai pela API (`api/envio-whatsapp.mjs`), com o token da Meta apenas nesse processo. Sem `META_ACCESS_TOKEN`, a API sobe e o envio fica desligado. Imagem e documento de um pedido em aberto ou expirado baixam o comprovante para `data/comprovantes/`. `POST /comprovantes` so existe com `SIMULADOR_ATIVO=1`.
+
+O que a Meta real ainda nao provou: aceite do token e do phone number id, eco de `biz_opaque_callback_data`, janela aplicada pela Meta, valores reais de pricing, atraso de delivered/read, URL efemera de midia, teto de 5 destinatarios do numero de teste e o catalogo de erros.
+
+O token privado de verificacao fica em `work/whatsapp/verify-token.txt` e nao deve ser enviado ao GitHub.
 
 ### Alternativa com Docker
 
@@ -150,4 +156,4 @@ Na edicao Community, cada fluxo concluido sera exportado manualmente do n8n em f
 
 ## Proxima decisao
 
-Publicar e testar o fluxo `workflows/04-webhook-whatsapp-simulado.json`. Depois, disponibilizar o webhook por HTTPS e configurar a entrada real do WhatsApp.
+Configurar o app e o numero na Meta, preencher `META_ACCESS_TOKEN`, `META_PHONE_NUMBER_ID` e `META_GRAPH_VERSION`, e apontar o webhook publico para o gateway. A versao da Graph nao foi confirmada na documentacao oficial nesta tarefa.
