@@ -1073,6 +1073,7 @@ const requestListener = async (request, response) => {
       'POST /simular-mensagem',
       'POST /admin/eventos',
       'GET /admin/eventos/:codigo/lotes',
+      'POST /admin/eventos/:codigo/lotes',
       'GET /admin/eventos/:codigo/participantes-confirmados',
       'GET /admin/eventos/:codigo/exportar-participantes.csv',
       'GET /admin/eventos/:codigo/check-in?busca=',
