@@ -7,27 +7,40 @@ alwaysApply: true
 
 ## Fonte da verdade
 
-Antes de agir, ler `docs/ESTADO_ATUAL.md` e `docs/OBJETIVO.md`. Esses arquivos são a fonte da verdade.
+`docs/ESTADO_ATUAL.md` descreve o código. `docs/OBJETIVO.md` descreve a regra. Ler os dois antes de agir. Não copiar detalhe operacional para a regra.
 
 ## Regra de negócio
 
-- Entrada na festa = nome na lista.
-- O nome só entra na lista após comprovante confirmado.
-- O preço depende do lote e da quantidade.
-- O total é sempre calculado na API.
+Bullets curtos. O restante está em `docs/OBJETIVO.md`. Não repetir schema, fila nem variáveis.
+
+- Entrada na festa = nome na lista, depois do comprovante aprovado.
+- O preço depende do lote e da quantidade. O total é sempre calculado na API.
+- Cotação não reserva. A reserva nasce ao enviar os nomes.
+- Só Pix. Custo mínimo. Sem CNPJ/MEI e sem disparo em massa.
 
 ## Arquitetura
 
-- A máquina de estados da venda vive na API (`api/server.mjs`).
-- O n8n só recebe, encaminha e orquestra avisos.
-- O LLM só interpreta texto livre.
+- A máquina de estados da venda vive em `api/conversa.mjs`, na API, não no n8n.
+- O n8n só encaminha.
+- Caminho: Cloud API → gateway com HMAC do corpo bruto → fila SQLite → worker → fluxo 04 → `POST /interno/mensagem` → outbox.
+- Envio real só com `META_ACCESS_TOKEN`.
 
 ## Trabalho
 
 - Um branch por tarefa.
 - Antes de codar, apresentar o plano (arquivos, riscos, como testar) e esperar o OK.
-- Testes com `node --test`. Sem dependências novas sem aprovação.
+- Testes com `node --test`. Dependência nova só com justificativa no plano e OK do William.
 - Nunca ler nem imprimir `.env` ou `work/`.
 - Nunca commitar dados reais.
 - Custo mínimo, salvo aprovação.
 - Responder em PT-BR.
+- Sem push, PR ou merge sem o William pedir.
+
+## Ambiente
+
+Windows, PowerShell 5.1.
+
+- `curl.exe` com `--data-binary` em arquivo.
+- `.env` gravado com `[IO.File]::WriteAllLines` sem BOM.
+- `.ps1` com `powershell -NoProfile -ExecutionPolicy Bypass -File`.
+- `Get-CimInstance` não funciona.
