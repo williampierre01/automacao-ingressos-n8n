@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
+import { criarControleEnvio, iniciarEnvio, reenviarSaida, respostaSaidas, retomarEnvio } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { iniciarRetencao } from './retencao-comprovantes.mjs';
@@ -56,6 +56,7 @@ if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
 const adminToken = requireSecret('ADMIN_TOKEN');
 const internalToken = requireSecret('API_INTERNAL_TOKEN');
 const envioConfig = configEnvio();
+const controleEnvio = criarControleEnvio();
 if (envioConfig.motivo) console.error(envioConfig.motivo);
 
 mkdirSync(dataFolder, { recursive: true });
@@ -1038,11 +1039,24 @@ const requestListener = async (request, response) => {
   }
 
   if (request.method === 'GET' && url.pathname === '/admin/whatsapp/saidas') {
-    sendJson(response, 200, {
-      ...resumoSaidas(database),
-      envio_ativo: Boolean(envioConfig.ativo),
-      itens: listarSaidasAlerta(database),
-    });
+    sendJson(response, 200, respostaSaidas(database, {
+      envioAtivo: envioConfig.ativo,
+      controle: controleEnvio,
+    }));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/admin/whatsapp/envio/retomar') {
+    try {
+      const confirmar = url.searchParams.get('confirmar') === '1';
+      sendJson(response, 200, retomarEnvio(database, controleEnvio, { confirmar }));
+    } catch (error) {
+      const status = error.codigo === 'CONFIRMAR' ? 409 : 400;
+      sendJson(response, status, {
+        erro: error.message,
+        ...(error.codigo === 'CONFIRMAR' ? { exige_confirmacao: true } : {}),
+      });
+    }
     return;
   }
 
@@ -1088,6 +1102,7 @@ const requestListener = async (request, response) => {
       'GET /admin/whatsapp/fila',
       'POST /admin/whatsapp/fila/:id/reenfileirar',
       'GET /admin/whatsapp/saidas',
+      'POST /admin/whatsapp/envio/retomar',
       'POST /admin/whatsapp/saidas/:id/reenviar',
       'POST /interno/mensagem',
       'GET /eventos',
@@ -1118,6 +1133,7 @@ const pararRetencao = iniciarRetencao(database, { pasta: receiptsFolder });
 
 const pararEnvio = iniciarEnvio(database, {
   config: envioConfig,
+  controle: controleEnvio,
   enviar: (mensagem) => enviarTexto({
     base: envioConfig.base,
     versao: envioConfig.versao,

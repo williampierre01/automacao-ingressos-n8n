@@ -123,6 +123,8 @@
       <h2>Envio para o WhatsApp</h2>
       <p>Respostas que falharam, ficaram fora da janela ou com envio incerto.</p>
       <p id="outbox-summary"></p>
+      <p id="outbox-pausa" class="badge" hidden></p>
+      <div class="actions"><button type="button" id="outbox-retomar" hidden>Retomar envio</button></div>
       <p id="outbox-alert" class="badge" hidden></p>
       <div id="outbox-list">Carregando…</div>
     </section>
@@ -286,6 +288,25 @@
       document.querySelector('#outbox-summary').textContent = result.envio_ativo
         ? `${pendentes} pendente(s) de envio.`
         : `${pendentes} pendente(s) de envio. O envio esta desligado.`;
+      const pausa = document.querySelector('#outbox-pausa');
+      const botaoRetomar = document.querySelector('#outbox-retomar');
+      if (result.envio_pausado) {
+        const codigo = Number(result.codigo);
+        const temCodigo = result.codigo !== null && result.codigo !== undefined && result.codigo !== '' && Number.isInteger(codigo);
+        const permissao = temCodigo && (codigo === 3 || codigo === 10 || codigo === 131005 || (codigo >= 200 && codigo <= 299));
+        const codeTxt = temCodigo ? ` (code ${codigo})` : '';
+        const motivo = permissao ? `Envio pausado${codeTxt}` : `Envio pausado por token invalido${codeTxt}`;
+        const quando = result.pausado_desde ? new Date(result.pausado_desde).toLocaleString('pt-BR') : '';
+        const aguardam = Number(result.saidas_aguardando || 0);
+        pausa.hidden = false;
+        pausa.textContent = `${motivo} desde ${quando}. ${aguardam} saidas aguardam. Troque o token, reinicie a API e, se o alerta continuar, retome o envio.`;
+        botaoRetomar.hidden = false;
+        botaoRetomar.disabled = false;
+      } else {
+        pausa.hidden = true;
+        pausa.textContent = '';
+        botaoRetomar.hidden = true;
+      }
       const alerta = document.querySelector('#outbox-alert');
       const falhou = Number(result.falhou || 0);
       const fora = Number(result.fora_da_janela || 0);
@@ -308,6 +329,28 @@
         </article>
       `).join('') || 'Nenhum alerta de envio.';
     }
+
+    document.querySelector('#outbox-retomar').addEventListener('click', async () => {
+      const button = document.querySelector('#outbox-retomar');
+      button.disabled = true;
+      try {
+        let response = await adminFetch('/admin/whatsapp/envio/retomar', { method: 'POST' });
+        let result = await response.json();
+        if (result.exige_confirmacao) {
+          if (!window.confirm(result.erro || 'Retomar o envio?')) {
+            button.disabled = false;
+            return;
+          }
+          response = await adminFetch('/admin/whatsapp/envio/retomar?confirmar=1', { method: 'POST' });
+          result = await response.json();
+        }
+        if (!response.ok) throw new Error(result.erro || 'Nao foi possivel retomar.');
+        await refreshOutbox();
+      } catch (error) {
+        alert(error.message);
+        button.disabled = false;
+      }
+    });
 
     document.querySelector('#outbox-list').addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-reenviar]');
