@@ -8,12 +8,15 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { aplicarStatuses } from './custo-whatsapp.mjs';
 import {
   criarControleEnvio,
+  iniciarEnvio,
   marcarEnviosIncertos,
   processarProximaSaida,
   reenviarSaida,
 } from './envio-whatsapp.mjs';
+import { limparMarcasPausa, marcaPausa } from './pausa-envio.mjs';
 import { baseGraph, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
 import { readFileSync } from 'node:fs';
@@ -300,6 +303,7 @@ test('token invalido pausa sem gastar tentativa e sem outro POST', async () => {
     const pausa = await processarProximaSaida(database, {
       agora,
       controle,
+      token,
       enviar: async () => {
         durante = database.prepare('SELECT status, tentativas FROM mensagens_saida WHERE id = ?').get(id);
         return { status: 401, codigo: 190, mensagem: token, error_subcode: 463 };
@@ -316,6 +320,9 @@ test('token invalido pausa sem gastar tentativa e sem outro POST', async () => {
     assert.equal(linha.proxima_tentativa_em, '2026-10-21T14:00:00.000Z');
     assert.equal(linha.ultimo_erro, 'token invalido (code 190)');
     assert.equal(linha.ultimo_erro.includes(token), false);
+    const marca = database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(id).erro_meta;
+    assert.equal(marca === marcaPausa(token), true);
+    assert.equal(String(marca).includes(token), false);
     assert.equal(controle.pausado, true);
     assert.equal(controle.codigo, 190);
 
@@ -330,7 +337,10 @@ test('token invalido pausa sem gastar tentativa e sem outro POST', async () => {
     });
     assert.equal(segurou.processou, false);
     assert.equal(posts, 0);
-    assert.equal(database.prepare('SELECT status FROM mensagens_saida WHERE id = ?').get(outro).status, 'pendente_envio');
+    const outroLinha = database.prepare('SELECT status, erro_meta, ultimo_erro FROM mensagens_saida WHERE id = ?').get(outro);
+    assert.equal(outroLinha.status, 'pendente_envio');
+    assert.equal(outroLinha.erro_meta, null);
+    assert.equal(outroLinha.ultimo_erro, '');
 
     const idFalhou = gravarSaida(database, {
       wamid: 'wamid.ja-falhou', telefone: '5511666660003', texto: 'x', recebidaEm: agora.toISOString(),
@@ -416,6 +426,148 @@ test('codes de token pausam e o 4xx comum continua falhou', async () => {
     assert.equal(seguiu.status, 'enviada');
     assert.equal(postsDepois, 1);
     assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_saida WHERE status = 'falhou'`).get().n, 2);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+function esperar(predicado, ms = 1500) {
+  const limite = Date.now() + ms;
+  return new Promise((resolve) => {
+    const passo = () => {
+      if (predicado() || Date.now() >= limite) {
+        resolve(Boolean(predicado()));
+        return;
+      }
+      setTimeout(passo, 20);
+    };
+    passo();
+  });
+}
+
+test('boot com o mesmo hash nao chama a Graph; outro hash limpa a marca e envia', async () => {
+  const token = 'm'.repeat(24);
+  const outroToken = 'n'.repeat(24);
+  const agora = new Date().toISOString();
+  const primeiro = await banco();
+  const controle = criarControleEnvio();
+  let posts = 0;
+  let parar = () => {};
+  try {
+    const id = gravarSaida(primeiro.database, {
+      wamid: 'wamid.marca', telefone: '5511555550001', texto: 'ola', recebidaEm: agora,
+    });
+    const vizinho = gravarSaida(primeiro.database, {
+      wamid: 'wamid.vizinho', telefone: '5511555550002', texto: 'oi', recebidaEm: agora,
+    });
+    primeiro.database.prepare(`
+      UPDATE mensagens_saida
+      SET ultimo_erro = 'token invalido (code 190)', erro_meta = ?, atualizado_em = '2026-10-21T12:00:00.000Z'
+      WHERE id = ?
+    `).run(marcaPausa(token), id);
+    primeiro.database.prepare(`
+      UPDATE mensagens_saida SET status = 'falhou', erro_meta = '131026 undeliverable' WHERE id = ?
+    `).run(vizinho);
+    const livre = gravarSaida(primeiro.database, {
+      wamid: 'wamid.livre', telefone: '5511555550003', texto: 'ei', recebidaEm: agora,
+    });
+    parar = iniciarEnvio(primeiro.database, {
+      config: { ativo: true, token },
+      controle,
+      intervaloMs: 20,
+      enviar: async () => {
+        posts += 1;
+        return { status: 200, wamid: `wamid.boot.${posts}` };
+      },
+    });
+    assert.equal(controle.pausado, true);
+    assert.equal(controle.codigo, 190);
+    assert.equal(controle.desde, '2026-10-21T12:00:00.000Z');
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(posts, 0);
+    assert.equal(primeiro.database.prepare('SELECT status FROM mensagens_saida WHERE id = ?').get(livre).status, 'pendente_envio');
+    assert.equal(primeiro.database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(vizinho).erro_meta, '131026 undeliverable');
+    parar();
+    parar = () => {};
+    const desligado = criarControleEnvio();
+    iniciarEnvio(primeiro.database, {
+      config: { ativo: false },
+      controle: desligado,
+      enviar: async () => { posts += 1; return { status: 200, wamid: 'wamid.nao' }; },
+    });
+    assert.equal(desligado.pausado, false);
+    assert.equal(primeiro.database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(id).erro_meta === marcaPausa(token), true);
+  } finally {
+    parar();
+    primeiro.database.close();
+    await rm(primeiro.diretorio, { recursive: true, force: true });
+  }
+
+  const segundo = await banco();
+  const controleNovo = criarControleEnvio();
+  let postsNovos = 0;
+  let pararNovo = () => {};
+  try {
+    const id = gravarSaida(segundo.database, {
+      wamid: 'wamid.troca', telefone: '5511555550004', texto: 'ola', recebidaEm: agora,
+    });
+    segundo.database.prepare(`
+      UPDATE mensagens_saida
+      SET ultimo_erro = 'token invalido (code 190)', erro_meta = ?, atualizado_em = '2026-10-21T12:00:00.000Z'
+      WHERE id = ?
+    `).run(marcaPausa(token), id);
+    pararNovo = iniciarEnvio(segundo.database, {
+      config: { ativo: true, token: outroToken },
+      controle: controleNovo,
+      intervaloMs: 20,
+      enviar: async () => {
+        postsNovos += 1;
+        return { status: 200, wamid: 'wamid.trocado' };
+      },
+    });
+    assert.equal(controleNovo.pausado, false);
+    assert.equal(segundo.database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(id).erro_meta, null);
+    assert.equal(await esperar(() => postsNovos === 1), true);
+    assert.equal(segundo.database.prepare('SELECT status FROM mensagens_saida WHERE id = ?').get(id).status, 'enviada');
+  } finally {
+    pararNovo();
+    segundo.database.close();
+    await rm(segundo.diretorio, { recursive: true, force: true });
+  }
+});
+
+test('statuses nao apaga a marca de pausa', async () => {
+  const { database, diretorio } = await banco();
+  const token = 'p'.repeat(24);
+  try {
+    const id = gravarSaida(database, {
+      wamid: 'wamid.marca-status', telefone: '5511444440001', texto: 'ola', recebidaEm: '2026-10-21T15:00:00.000Z',
+    });
+    const marca = marcaPausa(token);
+    database.prepare(`UPDATE mensagens_saida SET erro_meta = ?, ultimo_erro = ? WHERE id = ?`).run(marca, 'token invalido (code 190)', id);
+    aplicarStatuses(database, {
+      entry: [{ changes: [{ value: { statuses: [{
+        id: 'wamid.out',
+        status: 'failed',
+        biz_opaque_callback_data: String(id),
+        errors: [{ code: 131026, title: token }],
+      }] } }] }],
+    });
+    aplicarStatuses(database, {
+      entry: [{ changes: [{ value: { statuses: [{
+        id: 'wamid.out',
+        status: 'sent',
+        biz_opaque_callback_data: String(id),
+      }] } }] }],
+    });
+    const linha = database.prepare('SELECT status, erro_meta, ultimo_erro FROM mensagens_saida WHERE id = ?').get(id);
+    assert.equal(linha.status, 'pendente_envio');
+    assert.equal(linha.erro_meta === marca, true);
+    assert.equal(String(linha.erro_meta).includes(token), false);
+    assert.equal(linha.ultimo_erro, 'token invalido (code 190)');
+    assert.equal(limparMarcasPausa(database), 1);
+    assert.equal(database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(id).erro_meta, null);
   } finally {
     database.close();
     await rm(diretorio, { recursive: true, force: true });

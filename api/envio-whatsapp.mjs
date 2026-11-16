@@ -1,4 +1,5 @@
 import { emTransacao } from './lotes.mjs';
+import { marcaPausa, restaurarPausa } from './pausa-envio.mjs';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 const LIMITE_TEXTO = 4096;
@@ -180,13 +181,19 @@ function soltarClaim(database, linha, agora) {
   `).run(Number(linha.tentativasAntes), iso(agora), linha.id);
 }
 
-function pausarSaida(database, linha, codigo, agora) {
+function pausarSaida(database, linha, codigo, agora, token) {
   const momento = iso(agora);
   database.prepare(`
     UPDATE mensagens_saida
-    SET status = 'pendente_envio', tentativas = ?, ultimo_erro = ?, atualizado_em = ?
+    SET status = 'pendente_envio', tentativas = ?, ultimo_erro = ?, erro_meta = ?, atualizado_em = ?
     WHERE id = ?
-  `).run(Number(linha.tentativasAntes), textoErroPausa(codigo), momento, linha.id);
+  `).run(
+    Number(linha.tentativasAntes),
+    textoErroPausa(codigo),
+    token ? marcaPausa(token) : null,
+    momento,
+    linha.id,
+  );
   return momento;
 }
 
@@ -195,6 +202,7 @@ export async function processarProximaSaida(database, {
   agora = new Date(),
   maximo = maxTentativasEnvio(),
   controle,
+  token = '',
 } = {}) {
   if (controle?.pausado) return { processou: false, pausado: true };
   const linha = reivindicar(database, agora);
@@ -241,7 +249,7 @@ export async function processarProximaSaida(database, {
   const classe = classificarFalhaEnvio(resposta);
   if (classe === 'pausa') {
     const codigo = inteiro(resposta?.codigo);
-    const desde = pausarSaida(database, linha, codigo, agora);
+    const desde = pausarSaida(database, linha, codigo, agora, token);
     if (controle) {
       controle.pausado = true;
       controle.codigo = codigo;
@@ -342,6 +350,7 @@ export function iniciarEnvio(database, {
 } = {}) {
   const estado = controle || criarControleEnvio();
   marcarEnviosIncertos(database);
+  if (config?.ativo && config.token) restaurarPausa(database, estado, config.token);
   if (!config?.ativo) return () => {};
   let parado = false;
   let timer = null;
@@ -361,6 +370,7 @@ export function iniciarEnvio(database, {
         enviar: enviarComPortao,
         maximo: maxTentativasEnvio(env),
         controle: estado,
+        token: config.token,
       });
       espera = esperaDoCiclo(resultado.processou, estado, intervaloMs);
     } catch (error) {

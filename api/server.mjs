@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
-import { iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
+import { criarControleEnvio, iniciarEnvio, listarSaidasAlerta, reenviarSaida, resumoSaidas } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
 import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { iniciarRetencao } from './retencao-comprovantes.mjs';
@@ -56,6 +56,7 @@ if (Boolean(tlsCertificatePath) !== Boolean(tlsKeyPath)) {
 const adminToken = requireSecret('ADMIN_TOKEN');
 const internalToken = requireSecret('API_INTERNAL_TOKEN');
 const envioConfig = configEnvio();
+const controleEnvio = criarControleEnvio();
 if (envioConfig.motivo) console.error(envioConfig.motivo);
 
 mkdirSync(dataFolder, { recursive: true });
@@ -1118,6 +1119,7 @@ const pararRetencao = iniciarRetencao(database, { pasta: receiptsFolder });
 
 const pararEnvio = iniciarEnvio(database, {
   config: envioConfig,
+  controle: controleEnvio,
   enviar: (mensagem) => enviarTexto({
     base: envioConfig.base,
     versao: envioConfig.versao,

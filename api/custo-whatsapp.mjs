@@ -1,4 +1,5 @@
 import { emTransacao } from './lotes.mjs';
+import { PREFIXO_PAUSA } from './pausa-envio.mjs';
 
 const ORDEM = { sent: 1, delivered: 2, read: 3 };
 const NOMES = new Set(['sent', 'delivered', 'read', 'failed']);
@@ -56,9 +57,14 @@ function avancarStatusMeta(database, saida, nome, erro, agora) {
   if (nome === 'failed') {
     database.prepare(`
       UPDATE mensagens_saida
-      SET status_meta = 'failed', erro_meta = ?, atualizado_em = ?
+      SET status_meta = 'failed',
+        erro_meta = CASE
+          WHEN substr(COALESCE(erro_meta, ''), 1, length(?)) = ? THEN erro_meta
+          ELSE ?
+        END,
+        atualizado_em = ?
       WHERE id = ?
-    `).run(erro, momento, saida.id);
+    `).run(PREFIXO_PAUSA, PREFIXO_PAUSA, erro, momento, saida.id);
     return;
   }
   const atual = saida.status_meta || '';
