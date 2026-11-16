@@ -275,7 +275,7 @@ export async function processarProximaSaida(database, {
     marcarFalhou(database, linha.id, detalhe, agora, Number(linha.tentativasAntes) + 1);
     return { processou: true, status: 'falhou', id: linha.id };
   }
-  marcarIncerto(database, linha.id, detalhe || 'sem resposta', agora);
+  marcarIncerto(database, linha.id, detalhe || 'sem resposta', agora, Number(linha.tentativasAntes));
   return { processou: true, status: 'envio_incerto', id: linha.id };
 }
 

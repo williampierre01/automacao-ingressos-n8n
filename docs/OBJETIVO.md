@@ -35,7 +35,7 @@ A máquina de estados da venda vive na API e o n8n só encaminha; o detalhe est�
 
 ## Próximas tarefas
 
-1. Integração real com a Meta, incluindo tratar token inválido ou expirado pausando o envio.
+1. Integração real com a Meta.
 2. OCR local com antifraude e conciliação por extrato.
 3. Portaria por nome.
 4. IA de atendimento com RAG de conversas anonimizadas.

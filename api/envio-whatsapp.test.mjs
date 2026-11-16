@@ -363,6 +363,67 @@ test('token invalido pausa sem gastar tentativa e sem outro POST', async () => {
   }
 });
 
+test('status abaixo de 400 e fora de 2xx fica incerto com as tentativas de antes do claim', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-21T15:00:00.000Z');
+  try {
+    const id = gravarSaida(database, {
+      wamid: 'wamid.302', telefone: '5511500000302', texto: 'x', recebidaEm: agora.toISOString(),
+    });
+    database.prepare('UPDATE mensagens_saida SET tentativas = 4 WHERE id = ?').run(id);
+    const incerto = await processarProximaSaida(database, {
+      agora,
+      enviar: async () => ({ status: 302 }),
+    });
+    assert.equal(incerto.status, 'envio_incerto');
+    const linha = database.prepare('SELECT status, tentativas, ultimo_erro FROM mensagens_saida WHERE id = ?').get(id);
+    assert.equal(linha.status, 'envio_incerto');
+    assert.equal(linha.tentativas, 4);
+    assert.equal(linha.ultimo_erro, 'HTTP 302');
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('400 com code 130429 reagenda contando tentativa e code 100 continua falhou', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-21T15:00:00.000Z');
+  const recebidaEm = agora.toISOString();
+  try {
+    const idLimite = gravarSaida(database, {
+      wamid: 'wamid.130429', telefone: '5511600000001', texto: 'x', recebidaEm,
+    });
+    const limite = await processarProximaSaida(database, {
+      agora,
+      enviar: async () => ({ status: 400, codigo: 130429, mensagem: 'throughput' }),
+    });
+    assert.equal(limite.status, 'pendente_envio');
+    const reagendada = database.prepare(`
+      SELECT status, tentativas, proxima_tentativa_em FROM mensagens_saida WHERE id = ?
+    `).get(idLimite);
+    assert.equal(reagendada.status, 'pendente_envio');
+    assert.equal(reagendada.tentativas, 1);
+    assert.ok(reagendada.proxima_tentativa_em > recebidaEm);
+
+    const id100 = gravarSaida(database, {
+      wamid: 'wamid.100b', telefone: '5511600000002', texto: 'y', recebidaEm,
+    });
+    const falha = await processarProximaSaida(database, {
+      agora,
+      enviar: async () => ({ status: 400, codigo: 100, mensagem: 'parametro' }),
+    });
+    assert.equal(falha.id, id100);
+    assert.equal(falha.status, 'falhou');
+    const erro = database.prepare('SELECT status, tentativas FROM mensagens_saida WHERE id = ?').get(id100);
+    assert.equal(erro.status, 'falhou');
+    assert.equal(erro.tentativas, 1);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
 test('codes de token pausam e o 4xx comum continua falhou', async () => {
   const { database, diretorio } = await banco();
   const agora = new Date('2026-10-21T15:00:00.000Z');
