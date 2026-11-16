@@ -1,6 +1,6 @@
 # API local de atendimentos
 
-A API recebe os dados enviados pelo n8n e grava tudo no banco local SQLite em `data/atendimentos.sqlite`.
+O fluxo 04 chama `POST /interno/mensagem`. A venda e a outbox ficam nesta API, no SQLite em `data/atendimentos.sqlite`.
 
 ## Autenticacao
 
@@ -33,7 +33,7 @@ A API so inicia com `ADMIN_TOKEN` e `API_INTERNAL_TOKEN`, cada um com pelo menos
 - `POST /admin/reservas/expirar`: marca como expirada a reserva que ainda espera comprovante e já passou do prazo.
 - `GET /admin/eventos/:codigo/participantes-confirmados`: lista somente ingressos liberados para entrada.
 - `GET /admin/eventos/:codigo/exportar-participantes.csv`: baixa a lista do evento para abrir no Excel.
-- `GET /admin/eventos/:codigo/check-in?busca=`: localiza um ingresso aprovado pelo documento ou protocolo.
+- `GET /admin/eventos/:codigo/check-in?busca=`: localiza um ingresso aprovado pelo documento ou protocolo. A busca por nome ainda nao existe.
 - `POST /admin/eventos/:codigo/check-in`: confirma a entrada de um participante uma unica vez.
 
 ## Campos enviados

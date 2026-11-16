@@ -1,3 +1,5 @@
+DESATUALIZADO: historico anterior a Tarefa 4a. Valem docs/OBJETIVO.md e docs/ESTADO_ATUAL.md.
+
 # Arquitetura inicial
 
 ## Objetivo

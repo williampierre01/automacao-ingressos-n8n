@@ -36,7 +36,15 @@ function pedir(protocolo, port, method, path, body = '') {
   });
 }
 
-test('HTTPS nao serve interno nem POST /atendimentos; o HTTP continua', async () => {
+test('HTTPS nao serve interno nem POST /atendimentos; o HTTP continua', async (t) => {
+  try {
+    execFileSync('openssl', ['version'], { stdio: 'ignore' });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      t.skip('openssl nao esta no PATH; o certificado local nao foi gerado e as assercoes de HTTPS nao rodaram');
+      return;
+    }
+  }
   const diretorio = await mkdtemp(join(tmpdir(), 'ingressos-https-'));
   const cert = join(diretorio, 'cert.pem');
   const key = join(diretorio, 'key.pem');
