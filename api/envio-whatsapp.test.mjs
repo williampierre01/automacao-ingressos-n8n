@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  criarControleEnvio,
   marcarEnviosIncertos,
   processarProximaSaida,
   reenviarSaida,
@@ -71,6 +72,7 @@ test('http da Graph so vale em 127.0.0.1 e o texto leva o id local', async () =>
       base, versao: 'v0.0', phoneNumberId: '99', token, para: '5511999999999', texto: 'ola', callbackData: '7',
     });
     assert.equal(resposta.wamid, 'wamid.saida');
+    assert.equal(resposta.error_subcode, undefined);
     assert.equal(autorizacao, `Bearer ${token}`);
     const json = JSON.parse(corpo);
     assert.equal(json.biz_opaque_callback_data, '7');
@@ -253,6 +255,169 @@ db.close();
     assert.equal(Number(conferido.prepare(`SELECT COUNT(*) AS n FROM mensagens_saida WHERE status = 'enviada'`).get().n), 1);
     conferido.close();
   } finally {
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('enviarTexto devolve error_subcode sem precisar da rede', async () => {
+  const token = 's'.repeat(24);
+  const resposta = await enviarTexto({
+    base: new URL('http://127.0.0.1'),
+    versao: 'v0.0',
+    phoneNumberId: '99',
+    token,
+    para: '5511999999999',
+    texto: 'ola',
+    callbackData: '7',
+    fetchImpl: async () => ({
+      status: 400,
+      text: async () => JSON.stringify({
+        error: { code: 190, error_subcode: 463, message: token, type: 'OAuthException' },
+      }),
+    }),
+  });
+  assert.equal(resposta.status, 400);
+  assert.equal(resposta.codigo, 190);
+  assert.equal(resposta.error_subcode, 463);
+  assert.equal(String(resposta.mensagem).includes(token), true);
+});
+
+test('token invalido pausa sem gastar tentativa e sem outro POST', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-21T15:00:00.000Z');
+  const token = 'k'.repeat(24);
+  const controle = criarControleEnvio();
+  try {
+    const id = gravarSaida(database, {
+      wamid: 'wamid.pausa', telefone: '5511666660001', texto: 'ola', recebidaEm: agora.toISOString(),
+    });
+    database.prepare(`
+      UPDATE mensagens_saida
+      SET tentativas = 4, proxima_tentativa_em = ?
+      WHERE id = ?
+    `).run('2026-10-21T14:00:00.000Z', id);
+    let durante = null;
+    const pausa = await processarProximaSaida(database, {
+      agora,
+      controle,
+      enviar: async () => {
+        durante = database.prepare('SELECT status, tentativas FROM mensagens_saida WHERE id = ?').get(id);
+        return { status: 401, codigo: 190, mensagem: token, error_subcode: 463 };
+      },
+    });
+    assert.equal(pausa.status, 'pausado');
+    assert.equal(durante.status, 'enviando');
+    assert.equal(durante.tentativas, 5);
+    const linha = database.prepare(`
+      SELECT status, tentativas, proxima_tentativa_em, ultimo_erro FROM mensagens_saida WHERE id = ?
+    `).get(id);
+    assert.equal(linha.status, 'pendente_envio');
+    assert.equal(linha.tentativas, 4);
+    assert.equal(linha.proxima_tentativa_em, '2026-10-21T14:00:00.000Z');
+    assert.equal(linha.ultimo_erro, 'token invalido (code 190)');
+    assert.equal(linha.ultimo_erro.includes(token), false);
+    assert.equal(controle.pausado, true);
+    assert.equal(controle.codigo, 190);
+
+    const outro = gravarSaida(database, {
+      wamid: 'wamid.outro', telefone: '5511666660002', texto: 'oi', recebidaEm: agora.toISOString(),
+    });
+    let posts = 0;
+    const segurou = await processarProximaSaida(database, {
+      agora,
+      controle,
+      enviar: async () => { posts += 1; return { status: 200, wamid: 'wamid.nao' }; },
+    });
+    assert.equal(segurou.processou, false);
+    assert.equal(posts, 0);
+    assert.equal(database.prepare('SELECT status FROM mensagens_saida WHERE id = ?').get(outro).status, 'pendente_envio');
+
+    const idFalhou = gravarSaida(database, {
+      wamid: 'wamid.ja-falhou', telefone: '5511666660003', texto: 'x', recebidaEm: agora.toISOString(),
+    });
+    database.prepare(`UPDATE mensagens_saida SET status = 'falhou' WHERE id = ?`).run(idFalhou);
+    assert.equal(reenviarSaida(database, idFalhou, { confirmar: true, agora }).status, 'pendente_envio');
+    const manual = await processarProximaSaida(database, {
+      agora,
+      controle,
+      enviar: async () => { posts += 1; return { status: 200, wamid: 'wamid.nao' }; },
+    });
+    assert.equal(manual.processou, false);
+    assert.equal(posts, 0);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('codes de token pausam e o 4xx comum continua falhou', async () => {
+  const { database, diretorio } = await banco();
+  const agora = new Date('2026-10-21T15:00:00.000Z');
+  const recebidaEm = agora.toISOString();
+  try {
+    const casos = [
+      ['wamid.190', { status: 400, codigo: 190, mensagem: 'segredo-190' }],
+      ['wamid.100', { status: 400, codigo: 100, mensagem: 'parametro' }],
+      ['wamid.10', { status: 403, codigo: 10, mensagem: 'permissao' }],
+      ['wamid.403', { status: 403 }],
+      ['wamid.368', { status: 403, codigo: 368, mensagem: 'bloqueio' }],
+    ];
+    const telefones = ['5511700000001', '5511700000002', '5511700000003', '5511700000004', '5511700000005'];
+    const ids = casos.map((item, indice) => gravarSaida(database, {
+      wamid: item[0], telefone: telefones[indice], texto: 'x', recebidaEm,
+    }));
+    const adiar = (id) => {
+      database.prepare(`UPDATE mensagens_saida SET proxima_tentativa_em = ? WHERE id = ?`).run('2099-01-01T00:00:00.000Z', id);
+    };
+    const controle = criarControleEnvio();
+    const primeiro = await processarProximaSaida(database, {
+      agora, controle, enviar: async () => casos[0][1],
+    });
+    assert.equal(primeiro.status, 'pausado');
+    adiar(ids[0]);
+    controle.pausado = false;
+    const falha100 = await processarProximaSaida(database, {
+      agora, controle, enviar: async () => casos[1][1],
+    });
+    assert.equal(falha100.status, 'falhou');
+    assert.match(database.prepare('SELECT ultimo_erro FROM mensagens_saida WHERE id = ?').get(ids[1]).ultimo_erro, /^100 /);
+    const pausa10 = await processarProximaSaida(database, {
+      agora, controle, enviar: async () => casos[2][1],
+    });
+    assert.equal(pausa10.status, 'pausado');
+    assert.equal(controle.codigo, 10);
+    adiar(ids[2]);
+    controle.pausado = false;
+    const semJson = await processarProximaSaida(database, {
+      agora, controle, enviar: async () => casos[3][1],
+    });
+    assert.equal(semJson.status, 'pausado');
+    assert.equal(database.prepare('SELECT ultimo_erro FROM mensagens_saida WHERE id = ?').get(ids[3]).ultimo_erro, 'token invalido');
+    adiar(ids[3]);
+    controle.pausado = false;
+    let postsDepois = 0;
+    const bloqueio = await processarProximaSaida(database, {
+      agora, controle, enviar: async () => casos[4][1],
+    });
+    assert.equal(bloqueio.status, 'falhou');
+    assert.equal(controle.pausado, false);
+    const seguinte = gravarSaida(database, {
+      wamid: 'wamid.segue', telefone: '5511700000006', texto: 'y', recebidaEm,
+    });
+    const seguiu = await processarProximaSaida(database, {
+      agora,
+      controle,
+      enviar: async (pedido) => {
+        postsDepois += 1;
+        assert.equal(pedido.callbackData, String(seguinte));
+        return { status: 200, wamid: 'wamid.ok' };
+      },
+    });
+    assert.equal(seguiu.status, 'enviada');
+    assert.equal(postsDepois, 1);
+    assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM mensagens_saida WHERE status = 'falhou'`).get().n, 2);
+  } finally {
+    database.close();
     await rm(diretorio, { recursive: true, force: true });
   }
 });

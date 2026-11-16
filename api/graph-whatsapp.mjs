@@ -102,6 +102,7 @@ export async function enviarTexto({
   return {
     status: response.status,
     codigo: json?.error?.code ?? '',
+    error_subcode: json?.error?.error_subcode ?? '',
     mensagem: String(json?.error?.message ?? '').slice(0, 500),
   };
 }

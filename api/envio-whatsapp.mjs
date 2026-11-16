@@ -2,6 +2,46 @@ import { emTransacao } from './lotes.mjs';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 const LIMITE_TEXTO = 4096;
+const CODIGOS_PAUSA = new Set([190, 0, 102, 104, 10, 3, 131005]);
+const SUBCODES_PAUSA = new Set([458, 460, 463, 467]);
+const CODIGOS_RETRY = new Set([4, 17, 341, 80007, 130429, 131056]);
+
+function inteiro(valor) {
+  if (typeof valor === 'number' && Number.isInteger(valor)) return valor;
+  if (typeof valor === 'string' && /^-?\d+$/.test(valor.trim())) return Number(valor.trim());
+  return null;
+}
+
+export function criarControleEnvio() {
+  return { pausado: false, codigo: null, desde: null, drenar: false };
+}
+
+export function textoErroPausa(codigo) {
+  if (Number.isInteger(codigo)) return `token invalido (code ${codigo})`;
+  return 'token invalido';
+}
+
+export function classificarFalhaEnvio(resposta) {
+  const status = Number(resposta?.status ?? 0);
+  const code = inteiro(resposta?.codigo);
+  const sub = inteiro(resposta?.error_subcode);
+  if (status === 429 || status >= 500) return 'retry';
+  if (status < 400 || status >= 500) return 'incerto';
+  if (status === 401) return 'pausa';
+  if (code != null && (CODIGOS_PAUSA.has(code) || (code >= 200 && code <= 299))) return 'pausa';
+  if (sub != null && SUBCODES_PAUSA.has(sub)) return 'pausa';
+  if (status === 403 && code == null) return 'pausa';
+  if (code != null && CODIGOS_RETRY.has(code)) return 'retry';
+  return 'falhou';
+}
+
+export function esperaDoCiclo(processou, controle, intervaloMs) {
+  if (controle?.drenar) {
+    if (!processou) controle.drenar = false;
+    return intervaloMs;
+  }
+  return processou ? 0 : intervaloMs;
+}
 
 function iso(agora) {
   return (agora instanceof Date ? agora : new Date(agora)).toISOString();
@@ -52,13 +92,21 @@ function marcarFalhou(database, id, erro, agora, tentativas = null) {
   `).run(tentativas, truncar(erro), momento, id);
 }
 
-function marcarIncerto(database, id, erro, agora) {
+function marcarIncerto(database, id, erro, agora, tentativas = null) {
   const momento = iso(agora);
+  if (tentativas == null) {
+    database.prepare(`
+      UPDATE mensagens_saida
+      SET status = 'envio_incerto', ultimo_erro = ?, atualizado_em = ?
+      WHERE id = ?
+    `).run(truncar(erro), momento, id);
+    return;
+  }
   database.prepare(`
     UPDATE mensagens_saida
-    SET status = 'envio_incerto', ultimo_erro = ?, atualizado_em = ?
+    SET status = 'envio_incerto', tentativas = ?, ultimo_erro = ?, atualizado_em = ?
     WHERE id = ?
-  `).run(truncar(erro), momento, id);
+  `).run(tentativas, truncar(erro), momento, id);
 }
 
 const sqlProxima = `
@@ -106,32 +154,59 @@ function reivindicar(database, agora) {
       if (Number(mudou.changes) !== 1) return null;
       return { fora: true, id: escolhida.id };
     }
+    const previa = database.prepare('SELECT tentativas FROM mensagens_saida WHERE id = ?').get(escolhida.id);
     const mudou = database.prepare(`
       UPDATE mensagens_saida
-      SET status = 'enviando', atualizado_em = ?
+      SET status = 'enviando', tentativas = tentativas + 1, atualizado_em = ?
       WHERE id = ? AND status = 'pendente_envio'
     `).run(momento, escolhida.id);
     if (Number(mudou.changes) !== 1) return null;
-    return database.prepare(`
+    const linha = database.prepare(`
       SELECT s.id, s.texto, s.tentativas, e.telefone
       FROM mensagens_saida s
       JOIN mensagens_entrada e ON e.wamid = s.wamid
       WHERE s.id = ?
     `).get(escolhida.id);
+    linha.tentativasAntes = Number(previa?.tentativas ?? 0);
+    return linha;
   });
+}
+
+function soltarClaim(database, linha, agora) {
+  database.prepare(`
+    UPDATE mensagens_saida
+    SET status = 'pendente_envio', tentativas = ?, atualizado_em = ?
+    WHERE id = ? AND status = 'enviando'
+  `).run(Number(linha.tentativasAntes), iso(agora), linha.id);
+}
+
+function pausarSaida(database, linha, codigo, agora) {
+  const momento = iso(agora);
+  database.prepare(`
+    UPDATE mensagens_saida
+    SET status = 'pendente_envio', tentativas = ?, ultimo_erro = ?, atualizado_em = ?
+    WHERE id = ?
+  `).run(Number(linha.tentativasAntes), textoErroPausa(codigo), momento, linha.id);
+  return momento;
 }
 
 export async function processarProximaSaida(database, {
   enviar,
   agora = new Date(),
   maximo = maxTentativasEnvio(),
+  controle,
 } = {}) {
+  if (controle?.pausado) return { processou: false, pausado: true };
   const linha = reivindicar(database, agora);
   if (!linha) return { processou: false };
   if (linha.fora) return { processou: true, status: 'fora_da_janela', id: linha.id };
   if (String(linha.texto ?? '').length > LIMITE_TEXTO) {
-    marcarFalhou(database, linha.id, 'texto acima de 4096 caracteres', agora);
+    marcarFalhou(database, linha.id, 'texto acima de 4096 caracteres', agora, Number(linha.tentativasAntes));
     return { processou: true, status: 'falhou', id: linha.id };
+  }
+  if (controle?.pausado) {
+    soltarClaim(database, linha, agora);
+    return { processou: false, pausado: true };
   }
   let resposta;
   try {
@@ -141,26 +216,41 @@ export async function processarProximaSaida(database, {
       callbackData: String(linha.id),
     });
   } catch (error) {
-    marcarIncerto(database, linha.id, error.codigo === 'REDE' ? error.message : (error.message || 'rede'), agora);
+    if (error?.codigo === 'PAUSA') {
+      soltarClaim(database, linha, agora);
+      return { processou: false, pausado: true };
+    }
+    marcarIncerto(database, linha.id, error.codigo === 'REDE' ? error.message : (error.message || 'rede'), agora, Number(linha.tentativasAntes));
     return { processou: true, status: 'envio_incerto', id: linha.id };
   }
   const status = Number(resposta?.status ?? 0);
   if (status >= 200 && status < 300) {
     if (!resposta.wamid) {
-      marcarIncerto(database, linha.id, 'resposta sem wamid', agora);
+      marcarIncerto(database, linha.id, 'resposta sem wamid', agora, Number(linha.tentativasAntes));
       return { processou: true, status: 'envio_incerto', id: linha.id };
     }
     const momento = iso(agora);
     database.prepare(`
       UPDATE mensagens_saida
-      SET status = 'enviada', wamid_saida = ?, enviada_em = ?, atualizado_em = ?, ultimo_erro = ''
+      SET status = 'enviada', wamid_saida = ?, enviada_em = ?, atualizado_em = ?, ultimo_erro = '', tentativas = ?
       WHERE id = ?
-    `).run(String(resposta.wamid), momento, momento, linha.id);
+    `).run(String(resposta.wamid), momento, momento, Number(linha.tentativasAntes), linha.id);
     return { processou: true, status: 'enviada', id: linha.id };
   }
   const detalhe = detalheHttp(resposta);
-  if (status === 429 || status >= 500) {
-    const tentativas = Number(linha.tentativas) + 1;
+  const classe = classificarFalhaEnvio(resposta);
+  if (classe === 'pausa') {
+    const codigo = inteiro(resposta?.codigo);
+    const desde = pausarSaida(database, linha, codigo, agora);
+    if (controle) {
+      controle.pausado = true;
+      controle.codigo = codigo;
+      controle.desde = desde;
+    }
+    return { processou: true, status: 'pausado', id: linha.id, codigo };
+  }
+  if (classe === 'retry') {
+    const tentativas = Number(linha.tentativasAntes) + 1;
     if (tentativas >= maximo) {
       marcarFalhou(database, linha.id, detalhe, agora, tentativas);
       return { processou: true, status: 'falhou', id: linha.id };
@@ -173,8 +263,8 @@ export async function processarProximaSaida(database, {
     `).run(tentativas, proxima, detalhe, iso(agora), linha.id);
     return { processou: true, status: 'pendente_envio', id: linha.id };
   }
-  if (status >= 400 && status < 500) {
-    marcarFalhou(database, linha.id, detalhe, agora, Number(linha.tentativas) + 1);
+  if (classe === 'falhou') {
+    marcarFalhou(database, linha.id, detalhe, agora, Number(linha.tentativasAntes) + 1);
     return { processou: true, status: 'falhou', id: linha.id };
   }
   marcarIncerto(database, linha.id, detalhe || 'sem resposta', agora);
@@ -248,20 +338,31 @@ export function iniciarEnvio(database, {
   env = process.env,
   intervaloMs = 1000,
   config,
+  controle,
 } = {}) {
+  const estado = controle || criarControleEnvio();
   marcarEnviosIncertos(database);
   if (!config?.ativo) return () => {};
   let parado = false;
   let timer = null;
+  const enviarComPortao = (mensagem) => {
+    if (estado.pausado) {
+      const error = new Error('envio pausado');
+      error.codigo = 'PAUSA';
+      return Promise.reject(error);
+    }
+    return enviar(mensagem);
+  };
   const ciclo = async () => {
     if (parado) return;
     let espera = intervaloMs;
     try {
       const resultado = await processarProximaSaida(database, {
-        enviar,
+        enviar: enviarComPortao,
         maximo: maxTentativasEnvio(env),
+        controle: estado,
       });
-      if (resultado.processou) espera = 0;
+      espera = esperaDoCiclo(resultado.processou, estado, intervaloMs);
     } catch (error) {
       console.error(`Falha no envio: ${error.message}`);
     } finally {
