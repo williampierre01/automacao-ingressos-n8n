@@ -11,12 +11,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { aplicarStatuses } from './custo-whatsapp.mjs';
 import {
   criarControleEnvio,
+  esperaDoCiclo,
   iniciarEnvio,
   marcarEnviosIncertos,
   processarProximaSaida,
   reenviarSaida,
+  respostaSaidas,
+  retomarEnvio,
 } from './envio-whatsapp.mjs';
-import { limparMarcasPausa, marcaPausa } from './pausa-envio.mjs';
+import { hashTokenEnvio, limparMarcasPausa, marcaPausa } from './pausa-envio.mjs';
 import { baseGraph, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
 import { garantirEventoDemonstracao, migrar } from './lotes.mjs';
 import { readFileSync } from 'node:fs';
@@ -570,6 +573,199 @@ test('statuses nao apaga a marca de pausa', async () => {
     assert.equal(database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(id).erro_meta, null);
   } finally {
     database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('retomar exige confirmacao, nao antecipa a fila e sem pausa nao erra', async () => {
+  const { database, diretorio } = await banco();
+  const token = 'r'.repeat(24);
+  const agora = new Date('2026-10-21T15:00:00.000Z');
+  const controle = criarControleEnvio();
+  try {
+    const id = gravarSaida(database, {
+      wamid: 'wamid.retomar', telefone: '5511333330001', texto: 'ola', recebidaEm: agora.toISOString(),
+    });
+    const proxima = '2099-01-01T00:00:00.000Z';
+    database.prepare(`
+      UPDATE mensagens_saida
+      SET tentativas = 3, proxima_tentativa_em = ?, ultimo_erro = 'token invalido (code 10)',
+        erro_meta = ?, atualizado_em = '2026-10-21T12:00:00.000Z'
+      WHERE id = ?
+    `).run(proxima, marcaPausa(token), id);
+    const alerta = gravarSaida(database, {
+      wamid: 'wamid.alerta', telefone: '5511333330002', texto: 'x', recebidaEm: agora.toISOString(),
+    });
+    database.prepare(`
+      UPDATE mensagens_saida SET status = 'falhou', ultimo_erro = 'bloqueio', erro_meta = ? WHERE id = ?
+    `).run(marcaPausa(token), alerta);
+    controle.pausado = true;
+    controle.codigo = 10;
+    controle.desde = '2026-10-21T12:00:00.000Z';
+    const antes = database.prepare(`
+      SELECT status, tentativas, proxima_tentativa_em, ultimo_erro, erro_meta, atualizado_em
+      FROM mensagens_saida WHERE id = ?
+    `).get(id);
+    assert.throws(() => retomarEnvio(database, controle), (error) => error.codigo === 'CONFIRMAR');
+    const depois = database.prepare(`
+      SELECT status, tentativas, proxima_tentativa_em, ultimo_erro, erro_meta, atualizado_em
+      FROM mensagens_saida WHERE id = ?
+    `).get(id);
+    assert.equal(depois.status, antes.status);
+    assert.equal(depois.tentativas, 3);
+    assert.equal(depois.proxima_tentativa_em, proxima);
+    assert.equal(depois.atualizado_em, antes.atualizado_em);
+    assert.equal(depois.erro_meta === antes.erro_meta, true);
+    assert.equal(controle.pausado, true);
+
+    const corpo = respostaSaidas(database, { envioAtivo: true, controle });
+    const texto = JSON.stringify(corpo);
+    assert.equal(texto.includes(token), false);
+    assert.equal(texto.includes('pausa:'), false);
+    assert.equal(texto.includes(hashTokenEnvio(token)), false);
+    assert.equal(texto.includes('token invalido'), false);
+    assert.equal(corpo.envio_pausado, true);
+    assert.equal(corpo.codigo, 10);
+    assert.equal(corpo.pausado_desde, '2026-10-21T12:00:00.000Z');
+    assert.equal(corpo.saidas_aguardando, 1);
+    assert.equal(corpo.itens.length, 1);
+    assert.equal(corpo.itens[0].id, alerta);
+    assert.equal(corpo.itens[0].erro_meta, '');
+    assert.equal(corpo.itens[0].ultimo_erro, 'bloqueio');
+
+    const retomado = retomarEnvio(database, controle, { confirmar: true });
+    const textoRetomado = JSON.stringify(retomado);
+    assert.equal(textoRetomado.includes('pausa:'), false);
+    assert.equal(textoRetomado.includes(token), false);
+    assert.equal(textoRetomado.includes(hashTokenEnvio(token)), false);
+    assert.equal(retomado.retomado, true);
+    assert.equal(controle.pausado, false);
+    assert.equal(controle.drenar, true);
+    const fila = database.prepare(`
+      SELECT status, tentativas, proxima_tentativa_em, erro_meta FROM mensagens_saida WHERE id = ?
+    `).get(id);
+    assert.equal(fila.status, 'pendente_envio');
+    assert.equal(fila.tentativas, 3);
+    assert.equal(fila.proxima_tentativa_em, proxima);
+    assert.equal(fila.erro_meta, null);
+    assert.equal(database.prepare('SELECT erro_meta FROM mensagens_saida WHERE id = ?').get(alerta).erro_meta, null);
+    assert.deepEqual(retomarEnvio(database, controle), { mensagem: 'nada a retomar' });
+    assert.equal(esperaDoCiclo(true, controle, 1000), 1000);
+    assert.equal(controle.drenar, true);
+    assert.equal(esperaDoCiclo(false, controle, 1000), 1000);
+    assert.equal(controle.drenar, false);
+    assert.equal(esperaDoCiclo(true, controle, 1000), 0);
+  } finally {
+    database.close();
+    await rm(diretorio, { recursive: true, force: true });
+  }
+});
+
+test('GET /admin/whatsapp/saidas e o retomar nao devolvem a marca', async () => {
+  const { database, diretorio, caminho } = await banco();
+  const token = 'q'.repeat(24);
+  const admin = 'abcdefghijklmnopqrstuvwx';
+  const agora = new Date().toISOString();
+  const id = gravarSaida(database, {
+    wamid: 'wamid.http', telefone: '5511222220001', texto: 'ola', recebidaEm: agora,
+  });
+  database.prepare(`
+    UPDATE mensagens_saida
+    SET tentativas = 2, proxima_tentativa_em = '2099-01-01T00:00:00.000Z',
+      ultimo_erro = 'token invalido (code 190)', erro_meta = ?, atualizado_em = '2026-10-21T12:00:00.000Z'
+    WHERE id = ?
+  `).run(marcaPausa(token), id);
+  database.close();
+  let posts = 0;
+  const graph = createServer((req, res) => {
+    posts += 1;
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'recusado', code: 190 } }));
+  });
+  await new Promise((resolve) => graph.listen(0, '127.0.0.1', resolve));
+  const porta = 22000 + Math.floor(Math.random() * 20000);
+  const child = spawn(process.execPath, ['api/server.mjs'], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      ADMIN_TOKEN: admin,
+      API_INTERNAL_TOKEN: admin,
+      API_HOST: '127.0.0.1',
+      API_PORT: String(porta),
+      API_DATABASE_PATH: caminho,
+      META_ACCESS_TOKEN: token,
+      META_PHONE_NUMBER_ID: '99',
+      META_GRAPH_VERSION: 'v0.0',
+      META_GRAPH_BASE_URL: `http://127.0.0.1:${graph.address().port}`,
+      API_TLS_CERT_PATH: '',
+      API_TLS_KEY_PATH: '',
+    },
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const base = `http://127.0.0.1:${porta}`;
+  try {
+    const limite = Date.now() + 8000;
+    while (Date.now() < limite && !stdout.includes(`http://127.0.0.1:${porta}`)) {
+      if (child.exitCode !== null) break;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    assert.equal(stderr.includes(token), false);
+    assert.match(stdout, new RegExp(`http://127\\.0\\.0\\.1:${porta}`));
+    const lido = await fetch(`${base}/admin/whatsapp/saidas`, { headers: { Authorization: `Bearer ${admin}` } });
+    const texto = await lido.text();
+    assert.equal(texto.includes(token), false);
+    assert.equal(texto.includes('pausa:'), false);
+    assert.equal(texto.includes(hashTokenEnvio(token)), false);
+    assert.equal(texto.includes('token invalido'), false);
+    const json = JSON.parse(texto);
+    assert.equal(json.envio_pausado, true);
+    assert.equal(json.codigo, 190);
+    assert.equal(json.saidas_aguardando, 1);
+    assert.equal(json.itens.some((item) => item.id === id), false);
+    const semConfirmar = await fetch(`${base}/admin/whatsapp/envio/retomar`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}` },
+    });
+    assert.equal(semConfirmar.status, 409);
+    const corpo409 = await semConfirmar.text();
+    assert.equal(corpo409.includes(token), false);
+    assert.equal(corpo409.includes('pausa:'), false);
+    assert.equal(JSON.parse(corpo409).exige_confirmacao, true);
+    const conferido = new DatabaseSync(caminho);
+    conferido.exec('PRAGMA busy_timeout = 5000');
+    const meio = conferido.prepare('SELECT status, tentativas, erro_meta FROM mensagens_saida WHERE id = ?').get(id);
+    conferido.close();
+    assert.equal(meio.status, 'pendente_envio');
+    assert.equal(meio.tentativas, 2);
+    assert.equal(meio.erro_meta === marcaPausa(token), true);
+    const confirmado = await fetch(`${base}/admin/whatsapp/envio/retomar?confirmar=1`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}` },
+    });
+    const textoConfirmado = await confirmado.text();
+    assert.equal(confirmado.status, 200);
+    assert.equal(textoConfirmado.includes(token), false);
+    assert.equal(textoConfirmado.includes('pausa:'), false);
+    assert.equal(textoConfirmado.includes(hashTokenEnvio(token)), false);
+    assert.equal(JSON.parse(textoConfirmado).retomado, true);
+    const deNovo = await fetch(`${base}/admin/whatsapp/envio/retomar`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}` },
+    });
+    const textoDeNovo = await deNovo.text();
+    assert.equal(deNovo.status, 200);
+    assert.equal(JSON.parse(textoDeNovo).mensagem, 'nada a retomar');
+    assert.equal(posts, 0);
+  } finally {
+    child.kill();
+    await new Promise((resolve) => child.on('exit', resolve));
+    await new Promise((resolve) => graph.close(resolve));
     await rm(diretorio, { recursive: true, force: true });
   }
 });

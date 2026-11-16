@@ -1,5 +1,5 @@
 import { emTransacao } from './lotes.mjs';
-import { marcaPausa, restaurarPausa } from './pausa-envio.mjs';
+import { erroMetaPublico, limparMarcasPausa, marcaPausa, restaurarPausa } from './pausa-envio.mjs';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 const LIMITE_TEXTO = 4096;
@@ -306,7 +306,36 @@ export function listarSaidasAlerta(database) {
     WHERE s.status IN ('falhou', 'fora_da_janela', 'envio_incerto')
     ORDER BY s.id DESC
     LIMIT 100
-  `).all();
+  `).all().map((item) => ({ ...item, erro_meta: erroMetaPublico(item.erro_meta) }));
+}
+
+export function respostaSaidas(database, { envioAtivo = false, controle } = {}) {
+  const resumo = resumoSaidas(database);
+  const pausado = Boolean(controle?.pausado);
+  return {
+    ...resumo,
+    envio_ativo: Boolean(envioAtivo),
+    envio_pausado: pausado,
+    pausado_desde: pausado ? (controle.desde ?? null) : null,
+    saidas_aguardando: resumo.pendente_envio,
+    codigo: pausado ? (controle.codigo ?? null) : null,
+    itens: listarSaidasAlerta(database),
+  };
+}
+
+export function retomarEnvio(database, controle, { confirmar = false } = {}) {
+  if (!controle?.pausado) return { mensagem: 'nada a retomar' };
+  if (!confirmar) {
+    const error = new Error('Retomar o envio volta a chamar a Meta. Envie confirmar=1 para retomar.');
+    error.codigo = 'CONFIRMAR';
+    throw error;
+  }
+  limparMarcasPausa(database);
+  controle.pausado = false;
+  controle.codigo = null;
+  controle.desde = null;
+  controle.drenar = true;
+  return { retomado: true };
 }
 
 export function reenviarSaida(database, id, { confirmar = false, agora = new Date() } = {}) {
