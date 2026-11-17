@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { processarMensagem } from './conversa.mjs';
 import { baixarMidia, MidiaError } from './graph-whatsapp.mjs';
 import { digitosTelefone, emTransacao, registrarComprovante } from './lotes.mjs';
+import { marcarPausaDownload } from './pausa-envio.mjs';
 
 export const TEXTO_ARQUIVO = 'Recebi seu arquivo. O envio de comprovante por aqui ainda nao esta disponivel.';
 export const TEXTO_SEM_RESERVA = 'Nao ha reserva esperando comprovante.';
@@ -181,7 +182,7 @@ function gravarResposta(database, entrada, tipo, telefone, recebidaEm, resultado
 }
 
 async function processarMidia(database, entrada, tipo, {
-  agora, pastaComprovantes, baixar, env = process.env,
+  agora, pastaComprovantes, baixar, env = process.env, controle,
 } = {}) {
   const telefone = digitosTelefone(entrada.telefone);
   const recebidaEm = entrada.timestamp || iso(agora);
@@ -224,6 +225,13 @@ async function processarMidia(database, entrada, tipo, {
       sha256Esperado: entrada.midia_sha256,
     });
   } catch (error) {
+    if (error instanceof MidiaError && error.pausa === true) {
+      marcarPausaDownload(database, controle, {
+        token: String(env?.META_ACCESS_TOKEN ?? '').trim(),
+        texto: error.message,
+        agora,
+      });
+    }
     if (!(error instanceof MidiaError) || error.codigo !== 'permanente') throw error;
     return gravarResposta(database, entrada, tipo, telefone, recebidaEm, {
       resposta: error.message,
@@ -287,6 +295,7 @@ export async function processarEntrada(database, entrada, {
   pastaComprovantes,
   baixar,
   env,
+  controle,
 } = {}) {
   const wamid = String(entrada.id_mensagem ?? '').trim();
   const tipo = String(entrada.tipo ?? '').trim();
@@ -296,7 +305,7 @@ export async function processarEntrada(database, entrada, {
 
   if (TIPOS_ARQUIVO.has(tipo)) {
     return processarMidia(database, { ...entrada, id_mensagem: wamid }, tipo, {
-      agora, pastaComprovantes, baixar, env,
+      agora, pastaComprovantes, baixar, env, controle,
     });
   }
 

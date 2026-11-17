@@ -290,6 +290,9 @@
         : `${pendentes} pendente(s) de envio. O envio esta desligado.`;
       const pausa = document.querySelector('#outbox-pausa');
       const botaoRetomar = document.querySelector('#outbox-retomar');
+      const filaPend = Number(result.fila_token_invalido_pendentes || 0);
+      const filaFalhou = Number(result.fila_token_invalido_falhou || 0);
+      const filaTxt = `Fila com token invalido: ${filaPend} pendente(s), ${filaFalhou} falhou.`;
       if (result.envio_pausado) {
         const codigo = Number(result.codigo);
         const temCodigo = result.codigo !== null && result.codigo !== undefined && result.codigo !== '' && Number.isInteger(codigo);
@@ -299,9 +302,13 @@
         const quando = result.pausado_desde ? new Date(result.pausado_desde).toLocaleString('pt-BR') : '';
         const aguardam = Number(result.saidas_aguardando || 0);
         pausa.hidden = false;
-        pausa.textContent = `${motivo} desde ${quando}. ${aguardam} saidas aguardam. Troque o token, reinicie a API e, se o alerta continuar, retome o envio.`;
+        pausa.textContent = `${motivo} desde ${quando}. ${aguardam} saidas aguardam. Troque o token, reinicie a API e, se o alerta continuar, retome o envio. ${filaTxt}`;
         botaoRetomar.hidden = false;
         botaoRetomar.disabled = false;
+      } else if (filaPend > 0 || filaFalhou > 0) {
+        pausa.hidden = false;
+        pausa.textContent = `${filaTxt} Reenfileire os que falharam depois de trocar o token.`;
+        botaoRetomar.hidden = true;
       } else {
         pausa.hidden = true;
         pausa.textContent = '';

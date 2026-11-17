@@ -23,6 +23,11 @@ export function codigoDoTextoPausa(texto) {
   return match ? Number(match[1]) : null;
 }
 
+export function ehTextoTokenInvalido(texto) {
+  const valor = String(texto ?? '');
+  return valor === 'token invalido' || codigoDoTextoPausa(valor) != null;
+}
+
 function marcasPendentes(database) {
   return database.prepare(`
     SELECT id, erro_meta, ultimo_erro, atualizado_em
@@ -40,6 +45,30 @@ export function limparMarcasPausa(database) {
     WHERE substr(COALESCE(erro_meta, ''), 1, length(?)) = ?
   `).run(PREFIXO_PAUSA, PREFIXO_PAUSA);
   return Number(resultado.changes);
+}
+
+export function marcarPausaDownload(database, controle, { token, texto, agora = new Date() } = {}) {
+  if (!controle || controle.pausado) return { marcado: false };
+  const momento = (agora instanceof Date ? agora : new Date(agora)).toISOString();
+  const publico = ehTextoTokenInvalido(texto) ? String(texto) : 'token invalido';
+  let marcado = false;
+  if (database && token) {
+    const resultado = database.prepare(`
+      UPDATE mensagens_saida
+      SET erro_meta = ?, ultimo_erro = ?, atualizado_em = ?
+      WHERE id = (
+        SELECT id FROM mensagens_saida
+        WHERE status = 'pendente_envio'
+        ORDER BY id ASC
+        LIMIT 1
+      )
+    `).run(marcaPausa(token), publico, momento);
+    marcado = Number(resultado.changes) === 1;
+  }
+  controle.pausado = true;
+  controle.codigo = codigoDoTextoPausa(publico);
+  controle.desde = momento;
+  return { marcado };
 }
 
 export function restaurarPausa(database, controle, token) {
