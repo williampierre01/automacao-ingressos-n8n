@@ -379,7 +379,7 @@ test('token ausente nao grava entrada', async () => {
     await assert.rejects(processarEntrada(ctx.database, entradaImagem(), {
       pastaComprovantes: ctx.pasta,
       env: { META_GRAPH_VERSION: 'v0.0', META_ACCESS_TOKEN: '', META_GRAPH_BASE_URL: 'http://127.0.0.1:9' },
-    }), (error) => error instanceof MidiaError && /META_ACCESS_TOKEN/.test(error.message));
+    }), (error) => error instanceof MidiaError && error.codigo === 'transitorio' && error.pausa !== true && /META_ACCESS_TOKEN/.test(error.message));
     assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 0);
   } finally {
     await encerrar(ctx);
@@ -505,5 +505,213 @@ test('GET do admin nao le caminho com ..', async () => {
         unlinkSync(arquivo);
       }
     }
+  }
+});
+
+function erroGraph(code, extra = {}) {
+  return JSON.stringify({ error: { message: 'nao-usar', code, ...extra } });
+}
+
+async function pedidoIntacto(ctx) {
+  const pedido = ctx.database.prepare('SELECT status FROM pedidos WHERE id = ?').get(ctx.pedidoId);
+  assert.equal(pedido.status, 'aguardando_pagamento');
+  assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 0);
+  assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_saida').get().n, 0);
+  assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM comprovantes').get().n, 0);
+  assert.equal((await readdir(ctx.pasta)).length, 0);
+}
+
+test('token vazio nao consulta a Graph', async () => {
+  let chamadas = 0;
+  await assert.rejects(() => baixarMidia({
+    base: new URL('http://127.0.0.1:9'),
+    versao: 'v0.0',
+    token: '   ',
+    mediaId: 'midia-1',
+    pasta: tmpdir(),
+    fetchImpl: async () => {
+      chamadas += 1;
+      throw new Error('nao deveria consultar');
+    },
+  }), (error) => error instanceof MidiaError && error.codigo === 'transitorio' && error.pausa !== true);
+  assert.equal(chamadas, 0);
+});
+
+test('GET do media id classifica token, retry e 404 sem gravar o recuperavel', async () => {
+  const segredo = `segredo-midia-${'m'.repeat(24)}`;
+  const casos = [
+    {
+      nome: '401 code 190',
+      status: 401,
+      corpo: JSON.stringify({ error: { message: segredo, code: 190, error_subcode: 463 } }),
+      pausa: true,
+      texto: 'token invalido (code 190)',
+    },
+    {
+      nome: '403 sem code',
+      status: 403,
+      corpo: '',
+      pausa: true,
+      texto: 'token invalido',
+    },
+    {
+      nome: 'code 130429',
+      status: 400,
+      corpo: erroGraph(130429),
+      pausa: false,
+      transitorio: true,
+    },
+    {
+      nome: '404 sem code',
+      status: 404,
+      corpo: 'ausente',
+      permanente: true,
+    },
+  ];
+  for (const caso of casos) {
+    const ctx = await bancoTemporario();
+    const server = await escutar((request, response) => {
+      response.writeHead(caso.status, { 'Content-Type': 'application/json' });
+      response.end(caso.corpo);
+    });
+    try {
+      const base = new URL(`http://127.0.0.1:${server.address().port}`);
+      const promessa = processarEntrada(ctx.database, entradaImagem(), {
+        pastaComprovantes: ctx.pasta,
+        baixar: baixarLocal(base, ctx.pasta),
+      });
+      if (caso.permanente) {
+        const resultado = await promessa;
+        assert.equal(resultado.estado, 'comprovante_recusado', caso.nome);
+        assert.match(resultado.resposta, /Nao encontrei/, caso.nome);
+        assert.equal(resultado.resposta.includes(segredo), false, caso.nome);
+        assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 1, caso.nome);
+        assert.equal((await readdir(ctx.pasta)).length, 0, caso.nome);
+      } else {
+        await assert.rejects(promessa, (error) => {
+          assert.equal(error instanceof MidiaError, true, caso.nome);
+          assert.equal(error.codigo, 'transitorio', caso.nome);
+          assert.equal(error.pausa === true, caso.pausa, caso.nome);
+          assert.equal(String(error.message).includes(segredo), false, caso.nome);
+          if (caso.texto) assert.equal(error.message, caso.texto, caso.nome);
+          return true;
+        });
+        await pedidoIntacto(ctx);
+      }
+    } finally {
+      await fechar(server);
+      await encerrar(ctx);
+    }
+  }
+});
+
+test('GET da URL separa 403 sem JSON, 403 com code 368 e 401', async () => {
+  const segredo = `segredo-url-${'u'.repeat(24)}`;
+  const casos = [
+    { nome: '403 sem json', status: 403, corpo: 'forbidden', json: false, pausa: false, transitorio: true },
+    { nome: '403 code 368', status: 403, corpo: erroGraph(368), permanente: true },
+    { nome: '401', status: 401, corpo: JSON.stringify({ error: { message: segredo, code: 190 } }), pausa: true },
+  ];
+  for (const caso of casos) {
+    const ctx = await bancoTemporario();
+    const server = await escutar((request, response) => {
+      const url = new URL(request.url, 'http://127.0.0.1');
+      if (url.pathname.endsWith('/midia-1')) {
+        response.end(JSON.stringify({
+          url: `http://127.0.0.1:${server.address().port}/arquivo.png`,
+          mime_type: 'image/png',
+          file_size: png.length,
+        }));
+        return;
+      }
+      if (caso.json === false) {
+        response.writeHead(caso.status, { 'Content-Type': 'text/plain' });
+        response.end(caso.corpo);
+        return;
+      }
+      response.writeHead(caso.status, { 'Content-Type': 'application/json' });
+      response.end(caso.corpo);
+    });
+    try {
+      const base = new URL(`http://127.0.0.1:${server.address().port}`);
+      const promessa = processarEntrada(ctx.database, entradaImagem(), {
+        pastaComprovantes: ctx.pasta,
+        baixar: baixarLocal(base, ctx.pasta),
+      });
+      if (caso.permanente) {
+        const resultado = await promessa;
+        assert.equal(resultado.estado, 'comprovante_recusado', caso.nome);
+        assert.match(resultado.resposta, /HTTP 403/, caso.nome);
+        assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 1, caso.nome);
+        assert.equal((await readdir(ctx.pasta)).length, 0, caso.nome);
+      } else {
+        await assert.rejects(promessa, (error) => {
+          assert.equal(error instanceof MidiaError, true, caso.nome);
+          assert.equal(error.codigo, 'transitorio', caso.nome);
+          assert.equal(Boolean(error.pausa), Boolean(caso.pausa), caso.nome);
+          assert.equal(String(error.message).includes(segredo), false, caso.nome);
+          if (caso.pausa) assert.equal(error.message, 'token invalido (code 190)', caso.nome);
+          if (caso.transitorio && !caso.pausa) assert.equal(error.pausa, undefined, caso.nome);
+          return true;
+        });
+        await pedidoIntacto(ctx);
+      }
+    } finally {
+      await fechar(server);
+      await encerrar(ctx);
+    }
+  }
+});
+
+test('reentrega com token novo baixa uma vez e a segunda entrega e duplicada', async () => {
+  const ctx = await bancoTemporario();
+  let modo = '401';
+  let arquivos = 0;
+  const server = await escutar((request, response) => {
+    const url = new URL(request.url, 'http://127.0.0.1');
+    if (url.pathname.endsWith('/midia-1')) {
+      if (modo === '401') {
+        response.writeHead(401, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'recusado', code: 190 } }));
+        return;
+      }
+      response.end(JSON.stringify({
+        url: `http://127.0.0.1:${server.address().port}/arquivo.png`,
+        mime_type: 'image/png',
+        file_size: png.length,
+      }));
+      return;
+    }
+    arquivos += 1;
+    response.end(png);
+  });
+  try {
+    const base = new URL(`http://127.0.0.1:${server.address().port}`);
+    const id = 'wamid-reentrega';
+    const baixar = baixarLocal(base, ctx.pasta);
+    await assert.rejects(processarEntrada(ctx.database, entradaImagem({ campos: { id_mensagem: id } }), {
+      pastaComprovantes: ctx.pasta,
+      baixar,
+    }), (error) => error instanceof MidiaError && error.pausa === true);
+    await pedidoIntacto(ctx);
+    modo = '200';
+    const resultado = await processarEntrada(ctx.database, entradaImagem({ campos: { id_mensagem: id } }), {
+      pastaComprovantes: ctx.pasta,
+      baixar,
+    });
+    assert.equal(resultado.estado, 'pagamento_em_analise');
+    assert.equal(arquivos, 1);
+    const pedido = ctx.database.prepare('SELECT status FROM pedidos WHERE id = ?').get(ctx.pedidoId);
+    assert.equal(pedido.status, 'pagamento_em_analise');
+    const repetida = await processarEntrada(ctx.database, entradaImagem({ campos: { id_mensagem: id } }), {
+      pastaComprovantes: ctx.pasta,
+      baixar,
+    });
+    assert.equal(repetida.duplicada, true);
+    assert.equal(arquivos, 1);
+    assert.equal(ctx.database.prepare('SELECT COUNT(*) AS n FROM mensagens_entrada').get().n, 1);
+  } finally {
+    await fechar(server);
+    await encerrar(ctx);
   }
 });

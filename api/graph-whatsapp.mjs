@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { unlinkSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { classificarFalhaEnvio, textoErroPausa } from './envio-whatsapp.mjs';
 
 export function baseGraph(env = process.env) {
   const bruta = String(env.META_GRAPH_BASE_URL ?? '').trim() || 'https://graph.facebook.com';
@@ -135,6 +136,52 @@ function hostPermitido(url, base) {
   throw new MidiaError('permanente', 'A URL da midia nao e permitida.');
 }
 
+function codigoNumerico(valor) {
+  if (typeof valor === 'number' && Number.isInteger(valor)) return valor;
+  if (typeof valor === 'string' && /^-?\d+$/.test(valor.trim())) return Number(valor.trim());
+  return null;
+}
+
+async function camposErroGraph(response) {
+  const texto = await response.text();
+  const bruto = texto.trim();
+  if (!bruto) return { codigo: '', error_subcode: '', json: false };
+  let json;
+  try {
+    json = JSON.parse(bruto);
+  } catch {
+    return { codigo: '', error_subcode: '', json: false };
+  }
+  const erro = json && typeof json === 'object' ? json.error : undefined;
+  const corpo = erro && typeof erro === 'object' ? erro : {};
+  return {
+    codigo: corpo.code ?? '',
+    error_subcode: corpo.error_subcode ?? '',
+    json: true,
+  };
+}
+
+async function rejeitarDownload(response, { arquivo = false } = {}) {
+  const campos = await camposErroGraph(response);
+  const status = response.status;
+  if (arquivo && status === 403 && !campos.json) {
+    throw new MidiaError('transitorio', 'HTTP 403');
+  }
+  const classe = classificarFalhaEnvio({
+    status,
+    codigo: campos.codigo,
+    error_subcode: campos.error_subcode,
+  });
+  if (classe === 'pausa') {
+    const error = new MidiaError('transitorio', textoErroPausa(codigoNumerico(campos.codigo)));
+    error.pausa = true;
+    throw error;
+  }
+  if (classe === 'retry') throw new MidiaError('transitorio', `HTTP ${status}`);
+  if (!arquivo && status === 404) throw new MidiaError('permanente', 'Nao encontrei esse arquivo na Meta.');
+  throw new MidiaError('permanente', `HTTP ${status}`);
+}
+
 async function lerLimitado(response) {
   if (!response.body) throw new MidiaError('transitorio', 'resposta sem corpo');
   const reader = response.body.getReader();
@@ -180,11 +227,7 @@ export async function baixarMidia({
       signal: controller.signal,
       redirect: 'manual',
     });
-    if (metaResposta.status === 404) throw new MidiaError('permanente', 'Nao encontrei esse arquivo na Meta.');
-    if (metaResposta.status === 429 || metaResposta.status >= 500) {
-      throw new MidiaError('transitorio', `HTTP ${metaResposta.status}`);
-    }
-    if (metaResposta.status !== 200) throw new MidiaError('permanente', `HTTP ${metaResposta.status}`);
+    if (metaResposta.status !== 200) await rejeitarDownload(metaResposta, { arquivo: false });
     const meta = await metaResposta.json();
     const mime = String(meta.mime_type || mimeEsperado || '');
     if (!MIMES[mime] || (mimeEsperado && mime !== mimeEsperado)) {
@@ -214,8 +257,7 @@ export async function baixarMidia({
       hostPermitido(destino, base);
       atual = destino;
     }
-    if (resposta.status === 429 || resposta.status >= 500) throw new MidiaError('transitorio', `HTTP ${resposta.status}`);
-    if (resposta.status !== 200) throw new MidiaError('permanente', `HTTP ${resposta.status}`);
+    if (resposta.status !== 200) await rejeitarDownload(resposta, { arquivo: true });
     const arquivo = await lerLimitado(resposta);
     if (!magicConfere(arquivo, mime)) throw new MidiaError('permanente', 'O conteudo nao confere com o tipo do arquivo.');
     const hash = createHash('sha256').update(arquivo).digest('hex');
