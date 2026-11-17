@@ -1,5 +1,5 @@
 import { emTransacao } from './lotes.mjs';
-import { erroMetaPublico, limparMarcasPausa, marcaPausa, restaurarPausa } from './pausa-envio.mjs';
+import { ehTextoTokenInvalido, erroMetaPublico, limparMarcasPausa, marcaPausa, restaurarPausa } from './pausa-envio.mjs';
 
 const JANELA_MS = 24 * 60 * 60 * 1000;
 const LIMITE_TEXTO = 4096;
@@ -309,11 +309,30 @@ export function listarSaidasAlerta(database) {
   `).all().map((item) => ({ ...item, erro_meta: erroMetaPublico(item.erro_meta) }));
 }
 
+function contagemFilaToken(database) {
+  const linhas = database.prepare(`
+    SELECT status, ultimo_erro FROM fila_webhook
+    WHERE status IN ('pendente', 'falhou') AND ultimo_erro LIKE 'token invalido%'
+  `).all();
+  let pendentes = 0;
+  let falhou = 0;
+  for (const linha of linhas) {
+    if (!ehTextoTokenInvalido(linha.ultimo_erro)) continue;
+    if (linha.status === 'pendente') pendentes += 1;
+    else falhou += 1;
+  }
+  return {
+    fila_token_invalido_pendentes: pendentes,
+    fila_token_invalido_falhou: falhou,
+  };
+}
+
 export function respostaSaidas(database, { envioAtivo = false, controle } = {}) {
   const resumo = resumoSaidas(database);
   const pausado = Boolean(controle?.pausado);
   return {
     ...resumo,
+    ...contagemFilaToken(database),
     envio_ativo: Boolean(envioAtivo),
     envio_pausado: pausado,
     pausado_desde: pausado ? (controle.desde ?? null) : null,

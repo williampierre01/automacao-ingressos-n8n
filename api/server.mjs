@@ -9,7 +9,8 @@ import { adminAuthorized, requireSecret } from './auth.mjs';
 import { processarEntrada } from './entrada.mjs';
 import { criarControleEnvio, iniciarEnvio, reenviarSaida, respostaSaidas, retomarEnvio } from './envio-whatsapp.mjs';
 import { apagarEntregues, listarFalhas, montarCorpoSimulador, reenfileirar, resumoFila, reterCorpos, retencaoDias } from './fila-whatsapp.mjs';
-import { caminhoDentroDaPasta, configEnvio, enviarTexto } from './graph-whatsapp.mjs';
+import { caminhoDentroDaPasta, configEnvio, enviarTexto, MidiaError } from './graph-whatsapp.mjs';
+import { ehTextoTokenInvalido } from './pausa-envio.mjs';
 import { iniciarRetencao } from './retencao-comprovantes.mjs';
 import { rodarRotinas } from './rotinas.mjs';
 import {
@@ -906,13 +907,19 @@ const requestListener = async (request, response) => {
         midia_mime: normalizeText(body.midia_mime, 100),
         midia_sha256: normalizeText(body.midia_sha256, 128),
         midia_nome: normalizeText(body.midia_nome, 250),
-      }, { pastaComprovantes: receiptsFolder });
+      }, { pastaComprovantes: receiptsFolder, controle: controleEnvio });
       if (resultado.statusCode) {
         sendJson(response, resultado.statusCode, { erro: resultado.erro });
         return;
       }
       sendJson(response, 200, resultado);
     } catch (error) {
+      if (error instanceof MidiaError && error.pausa === true) {
+        const texto = ehTextoTokenInvalido(error.message) ? error.message : 'token invalido';
+        sendJson(response, 500, { erro: texto });
+        console.error(`Falha em /interno/mensagem: ${texto}`);
+        return;
+      }
       sendJson(response, 500, { erro: 'Nao foi possivel processar a mensagem.' });
       console.error(`Falha em /interno/mensagem: ${error.message}`);
     }
